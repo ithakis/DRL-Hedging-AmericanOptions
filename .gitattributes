@@ -1,0 +1,6 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+Portfolio/MainPortfolio.pkl filter=lfs diff=lfs merge=lfs -text
+
+# Jupyter Notebook files strip outputs
+*.ipynb filter=stripoutputs

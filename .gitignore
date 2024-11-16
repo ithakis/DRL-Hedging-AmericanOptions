@@ -1,0 +1,62 @@
+# My Ignores
+logs
+portfolios
+1. Delta-Gamma Hedging
+
+# Logs
+logs/
+*.log
+.terminal_output*
+.terminal_output.txt
+.terminal_output2.txt
+.terminal_output2_2.txt
+.terminal_output3.txt
+
+
+# System files
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.env
+*.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Environment and dependencies
+.env
+*.env
+Pipfile
+Pipfile.lock
+poetry.lock
+.envrc
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+.venv/
+.env/
+
+# Temporary files
+.temp_dir_loky/
+*.tmp
+*.temp
+*.swp
+*.swo
+*.bak
+*.orig
+
+# Docker
+Dockerfile
+.dockerignore
