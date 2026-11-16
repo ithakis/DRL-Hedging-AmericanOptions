@@ -52,6 +52,7 @@ flags.DEFINE_string('numerical_accuracy', 'low', 'Numerical accuracy level: high
 flags.DEFINE_integer('n_jobs',          -1, 'Number of CPU cores for parallel processing (Default to all available cores: -1)')
 flags.DEFINE_integer('eval_seed',       1234, 'Evaluation Seed (Default 1234)')
 flags.DEFINE_string('portfolio_folder', None, 'Full path to the main portfolio folder to load or create')
+flags.DEFINE_string('pricing_backend', 'quantlib', 'Heston American pricing: quantlib (FD solve per option) or table (precomputed, environment/heston_table.py)')
 
 flags.DEFINE_integer('eval_sim',        1024*5, 'Evaluation episodes (Default 5,000)')
 flags.DEFINE_string('strategy',         'delta', 'Hedging strategy opt: delta / gamma / vega (Default delta)')
@@ -163,7 +164,7 @@ def main(argv):
         init_vol=FLAGS.init_vol, kappa=FLAGS.kappa, theta=FLAGS.theta, volvol=FLAGS.volvol, rho=FLAGS.rho,
         stochastic_process=FLAGS.stochastic_process, time_to_simulate=FLAGS.time_to_simulate, num_sim=FLAGS.eval_sim, frq=FLAGS.frq, TradingDaysPerYear=FLAGS.TradingDaysPerYear,
         numerical_accuracy=FLAGS.numerical_accuracy, n_jobs=FLAGS.n_jobs, np_seed=FLAGS.eval_seed,
-        action_high=1.0, action_low=0.0
+        action_high=1.0, action_low=0.0, pricing_backend=FLAGS.pricing_backend
     )
 
     # Initialize Evaluation Environment
