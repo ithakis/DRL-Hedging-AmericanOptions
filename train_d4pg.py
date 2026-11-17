@@ -167,8 +167,6 @@ def evaluate(agent_or_actor, market, spread, vega_obs, chunk=8192):
 def main(argv=None):
     a = get_args(argv)
     torch.set_num_threads(a.torch_threads)
-    import numba
-    numba.set_num_threads(min(a.torch_threads, numba.config.NUMBA_NUM_THREADS))
     out = Path(a.out) / a.run_name
     out.mkdir(parents=True, exist_ok=True)
     json.dump(vars(a), open(out / "config.json", "w"), indent=2)
@@ -179,6 +177,9 @@ def main(argv=None):
     test_m = None if a.skip_test else get_market(a, a.test_seed, a.n_test)
     t_market = time.time() - t0
     print(f"markets ready in {t_market:.1f}s")
+    # market building uses all cores; training uses --torch_threads (also for the numba loss kernel)
+    import numba
+    numba.set_num_threads(max(1, min(a.torch_threads, numba.config.NUMBA_NUM_THREADS)))
 
     env = HedgingEnv(train_m, a.spread, a.vega_obs)
     agent = D4PGQR(env.obs_dim, obj_func=a.obj_func, threshold=a.threshold, std_coef=a.std_coef, seed=a.seed,
