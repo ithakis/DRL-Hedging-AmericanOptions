@@ -1,9 +1,11 @@
 #!/bin/bash
 # Train all runs of one block, P runs at a time (each run uses 1 thread).
 #   PYTHONPATH=. bash review/retrain/run_block.sh A 6
+#   PYTHONPATH=. bash review/retrain/run_block.sh B 2 'spread0.0(1|2)_seed1$'   # only runs matching a regex
 # Finished runs (results.json exists) are skipped, so the script can be restarted after a stop.
 set -u
 BLOCK=${1:?block A or B}; P=${2:-6}  # 6 parallel = best throughput on the M1 Air
+FILTER=${3:-.}
 mkdir -p logs_torch/retrain/_stdout
 python - "$BLOCK" <<'PY' > "logs_torch/retrain/_jobs_$BLOCK.txt"
 import sys, shlex
@@ -16,6 +18,7 @@ for seed in BLOCKS[b]["seeds"]:
 PY
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMBA_NUM_THREADS=1
 while IFS=$'\t' read -r name args; do
+  echo "$name" | grep -Eq "$FILTER" || continue
   if [ -f "logs_torch/retrain/$name/results.json" ]; then echo "skip $name (done)" >&2; continue; fi
   printf '%s\t%s\n' "$name" "$args"
 done < "logs_torch/retrain/_jobs_$BLOCK.txt" | \
