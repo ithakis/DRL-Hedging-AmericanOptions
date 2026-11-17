@@ -17,7 +17,7 @@ from typing import List
 
 import QuantLib as ql
 from joblib import Parallel, delayed
-from numba import njit
+from numba import njit, prange
 from numpy import exp, log
 from scipy.stats import qmc
 from tqdm import trange
@@ -207,6 +207,9 @@ class Utils:
         # or 'table' (precomputed price/Greeks table, see environment/heston_table.py)
         pricing_backend: str = "quantlib",
         table_dir: str = None,
+        # Variance risk premium for simulating Heston paths under P (kappa, theta are the Q
+        # parameters used for pricing; kappa_P = kappa - lambda_v, theta_P = kappa theta / kappa_P).
+        lambda_v: float = 0.0,
     ):
         """
         Initializes the parameters and configurations for the utility functions in the simulation environment.
@@ -341,6 +344,7 @@ class Utils:
             raise ValueError("pricing_backend must be 'quantlib' or 'table'.")
         self.pricing_backend = pricing_backend
         self.table_dir = table_dir
+        self.lambda_v = float(lambda_v)
         self._heston_table = None
 
     def __getstate__(self):
@@ -396,6 +400,7 @@ class Utils:
             "action_low": self.action_low,
             "action_high": self.action_high,
             "pricing_backend": getattr(self, "pricing_backend", "quantlib"),
+            **({"lambda_v": self.lambda_v} if getattr(self, "lambda_v", 0.0) else {}),
         }
 
     def __eq__(self, other):
@@ -693,7 +698,7 @@ class Utils:
         ** Note: Used in Trading.py
         """
         if self.stochastic_process == "Heston":
-            return self.get_sim_path_Heston()
+            return self.get_sim_path_Heston(lambda_v=getattr(self, "lambda_v", 0.0))
         elif self.stochastic_process == "GBM":
             return self.get_sim_path_GBM()
 
@@ -1002,27 +1007,43 @@ class Utils:
                 vega = (1 / 100) * (C0_up - C0_down) / (2 * iv[idx] * eps_iv)
                 return idx, C0, delta, gamma, vega
 
-            # Parallel processing for GBM
-            results = Parallel(
-                n_jobs=self.n_jobs,
-                backend=self._backend,
-                pre_dispatch="1*n_jobs",
-                batch_size=100,
-                timeout=120,
-                mmap_mode="r",
-                temp_folder=None,
-                # max_nbytes='200000M'
-                # inner_max_num_threads=1,
-            )(delayed(calculate_gbm_option)(idx) for idx in active_indices)
-            # Assign results to the respective arrays
-            for result in results:
-                idx, C0, delta_val, gamma_val, vega_val = result
-                price[idx] = C0
-                delta[idx] = delta_val
-                gamma[idx] = gamma_val
-                vega[idx] = vega_val
-            del results
-            gc.collect()
+            if getattr(self, "gbm_pricer", "batch") == "batch":
+                # Same binomial kernel and the same three solves per option, but one numba
+                # parallel loop instead of one joblib task per option (joblib overhead was
+                # ~6 ms per option, the tree itself ~0.1 ms). Results match the joblib path.
+                if active_indices:
+                    idx_arr = tuple(np.array(a) for a in zip(*active_indices))
+                    fT = np.maximum(ttms[idx_arr], 1) / T
+                    p_, d_, g_, v_ = _american_gbm_batch(
+                        np.ascontiguousarray(S0[idx_arr], dtype=np.float64),
+                        np.ascontiguousarray(K[idx_arr], dtype=np.float64),
+                        np.ascontiguousarray(fT, dtype=np.float64),
+                        np.ascontiguousarray(np.broadcast_to(iv, S0.shape)[idx_arr], dtype=np.float64),
+                        float(self.r), float(self.q), int(N), float(eps_iv),
+                    )
+                    price[idx_arr], delta[idx_arr], gamma[idx_arr], vega[idx_arr] = p_, d_, g_, v_
+            else:
+                # Original path: one joblib task per option.
+                results = Parallel(
+                    n_jobs=self.n_jobs,
+                    backend=self._backend,
+                    pre_dispatch="1*n_jobs",
+                    batch_size=100,
+                    timeout=120,
+                    mmap_mode="r",
+                    temp_folder=None,
+                    # max_nbytes='200000M'
+                    # inner_max_num_threads=1,
+                )(delayed(calculate_gbm_option)(idx) for idx in active_indices)
+                # Assign results to the respective arrays
+                for result in results:
+                    idx, C0, delta_val, gamma_val, vega_val = result
+                    price[idx] = C0
+                    delta[idx] = delta_val
+                    gamma[idx] = gamma_val
+                    vega[idx] = vega_val
+                del results
+                gc.collect()
 
         elif stochastic_process == "Heston" and getattr(self, "pricing_backend", "quantlib") == "table":
             # Precomputed QuantLib table (same engine, same Greek definitions), vectorised.
@@ -1795,3 +1816,27 @@ class Utils:
                     print(f"({_}) options[-1].gamma_path: {options[-1][_].gamma_path}")
         print(f"priced options: {pricing_counter}")
         return np.array(options)
+
+
+# ------------------------------------------------------------------------------------------------
+# Batched GBM American pricer (same kernel as Utils._American_Option_GBM, numba-parallel loop).
+_AMERICAN_GBM_KERNEL = Utils._American_Option_GBM
+
+
+@njit(parallel=True, cache=True)
+def _american_gbm_batch(S0, K, T, iv, r, q, N, eps_iv):
+
+    n = S0.shape[0]
+    price = np.empty(n)
+    delta = np.empty(n)
+    gamma = np.empty(n)
+    vega = np.empty(n)
+    for i in prange(n):
+        c0, d0, g0 = _AMERICAN_GBM_KERNEL(S0[i], K[i], T[i], r, q, iv[i], N, "put")
+        cu = _AMERICAN_GBM_KERNEL(S0[i], K[i], T[i], r, q, iv[i] * (1 + eps_iv), N, "put")[0]
+        cd = _AMERICAN_GBM_KERNEL(S0[i], K[i], T[i], r, q, iv[i] * (1 - eps_iv), N, "put")[0]
+        price[i] = c0
+        delta[i] = d0
+        gamma[i] = g0
+        vega[i] = (1 / 100) * (cu - cd) / (2 * iv[i] * eps_iv)
+    return price, delta, gamma, vega

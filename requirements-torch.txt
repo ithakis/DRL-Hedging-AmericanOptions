@@ -1,0 +1,13 @@
+# PyTorch pipeline (train_d4pg.py); works on macOS ARM. QuantLib only needed to build new Heston tables
+# or for --pricing_backend quantlib.
+torch>=2.2
+numpy
+scipy
+pandas
+numba
+joblib
+tqdm
+matplotlib
+absl-py
+QuantLib
+pytest

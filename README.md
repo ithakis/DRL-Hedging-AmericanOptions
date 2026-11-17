@@ -92,6 +92,62 @@ Artifacts and logs
 - `--logger_prefix` allows grouping multiple runs under a common subfolder.
 - Portfolios and environment snapshots live under `./portfolios/.Portfolio_*/{Train,Eval}` and are reused when you pass `--portfolio_folder`.
 
+## PyTorch D4PG-QR (revision pipeline, runs on macOS ARM)
+
+The original agent (`agent/`, `run.py`: dm-acme 0.4 + Reverb + TF) does not install on Apple Silicon.
+`train_d4pg.py` trains the same agent in PyTorch (structure from the swing D4PG of
+[DRL-Swing-Options](https://github.com/ithakis/DRL-Swing-Options), quantile critic and learner settings
+from `agent/`). All revision results come from this pipeline only.
+
+Same as before: state `[S, portfolio gamma, hedge gamma (, portfolio vega, hedge vega)]`, action in [0, 1]
+between no hedge and the gamma-/vega-neutral amount, reward = P&L minus option cost, objectives
+`meanstd` / `var` / `cvar` on a 99-quantile critic with quantile-Huber loss (`qr-huber`),
+n-step 5, discount 1, Adam 1e-4, noise 0.3, hard target update every 100 steps, gradient clip 40,
+actor 256-256-256, critic 512-512-256 (all flags, see `--help`).
+
+Install (conda env or pip): `pip install -r requirements-torch.txt` (torch, numba, QuantLib, numpy, scipy, pandas, ...).
+
+**Paths.** Three disjoint path sets: training paths (`--market_seed 1234`, shared by all agent seeds),
+validation (`--val_seed 2025`, 8,192 paths) and test (`--test_seed 654`, 8,192 paths, the same as the rule
+baselines). Every `--val_every 1000` episodes the greedy policy is run on the validation paths and the
+checkpoint with the best validation objective (VaR95 / CVaR95 of the loss, or -(mean - 1.645 std)) is kept.
+Only this checkpoint is evaluated on the test paths; results have bootstrap standard errors.
+Markets are cached in `markets/` as `.npy` files (memory-mapped, so parallel runs share them).
+Heston prices come from the precomputed table (`--pricing_backend table`, built once per parameter set).
+
+**Train** (paper setup is the default: S0 = K = 10, 30-day hedges, Poisson 60-day liabilities):
+
+```bash
+# Heston, CVaR95, 1% option cost (vega in the state by default for Heston)
+python train_d4pg.py --process Heston --obj_func cvar --spread 0.01 --seed 11 --train_episodes 40000
+# GBM (sigma = 0.3), VaR95, 2% cost (no vega in the state by default for GBM)
+python train_d4pg.py --process GBM --obj_func var --spread 0.02 --seed 11 --train_episodes 40000
+# Heston under P (paper: r = 2%, mu = 3%, lambda_v = 1.5; kappa/theta are the Q values used for pricing)
+python train_d4pg.py --process Heston --r 0.02 --mu 0.03 --lambda_v 1.5 --kappa 2.5 --theta 0.036 ...
+```
+
+Output in `logs_torch/<run_name>/`: `validation.csv` (score per checkpoint), `results.json` (test metrics
+with SEs, selected episode, timings), `best_actor.pt`, `final_actor.pt`, and `policy_best.npz`.
+Use `--torch_threads 1` (default) and run several agents in parallel rather than one agent on many cores.
+
+**Evaluate / export.**
+
+```bash
+# a trained policy on another market (e.g. robustness: vol-of-vol 0.4), optionally save that market
+python evaluate_d4pg.py --policy logs_torch/<run>/policy_best.npz --volvol 0.4 --export_market market.npz
+# without this repository: only numpy is needed
+python tools/evaluate_policy_numpy.py --policy policy_best.npz --market market_test.npz
+```
+
+`policy_best.npz` holds the actor weights (`W0, b0, ln_gamma, ln_beta, W1.., W_out, b_out`) and a
+`meta_json` string (cost, state layout, forward pass). `--export_test_market` writes the test market as
+`market_test.npz`. `tools/evaluate_policy_numpy.py` is one file (policy forward pass, environment,
+metrics) that a co-author can run with numpy alone.
+
+**Checks.** `pytest tests/test_torch_d4pg.py`: the vectorised environment gives the same states and
+rewards as `MainPortfolio` (GBM, Heston, Heston under P), the numpy evaluator matches the PyTorch one,
+and the fused quantile loss matches the direct port of `agent/distributional.py`.
+
 ## Reproducing paper experiments
 
 - Use the provided shell scripts as references:

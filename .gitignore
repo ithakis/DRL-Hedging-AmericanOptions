@@ -64,3 +64,6 @@ venv.bak/
 # Docker
 Dockerfile
 .dockerignore
+
+markets/
+logs_torch/
