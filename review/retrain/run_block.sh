@@ -1,9 +1,9 @@
 #!/bin/bash
 # Train all runs of one block, P runs at a time (each run uses 1 thread).
-#   PYTHONPATH=. bash review/retrain/run_block.sh A 4
+#   PYTHONPATH=. bash review/retrain/run_block.sh A 6
 # Finished runs (results.json exists) are skipped, so the script can be restarted after a stop.
 set -u
-BLOCK=${1:?block A or B}; P=${2:-4}
+BLOCK=${1:?block A or B}; P=${2:-6}  # 6 parallel = best throughput on the M1 Air
 mkdir -p logs_torch/retrain/_stdout
 python - "$BLOCK" <<'PY' > "logs_torch/retrain/_jobs_$BLOCK.txt"
 import sys, shlex
