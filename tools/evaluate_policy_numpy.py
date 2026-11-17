@@ -30,6 +30,10 @@ class NumpyPolicy:
 
     def __call__(self, obs):
         p = self.p
+        if "obs_center" in p:
+            obs = (obs - p["obs_center"]) / p["obs_scale"]
+            if float(p["obs_clip"]) > 0:
+                obs = np.clip(obs, -float(p["obs_clip"]), float(p["obs_clip"]))
         h = obs @ p["W0"] + p["b0"]
         mu = h.mean(-1, keepdims=True)
         var = h.var(-1, keepdims=True)

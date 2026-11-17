@@ -60,18 +60,40 @@ class LayerNormMLP(nn.Module):
         return x
 
 
+class ObsNormalizer(nn.Module):
+    """Fixed robust scaling x_hat = clip((x - median) / IQR, -clip, clip), as the swing D4PG's
+    RobustNormalizer. Median and IQR come from the TRAINING paths only (train_d4pg.obs_stats).
+    Identity when center = 0, scale = 1, clip = 0."""
+
+    def __init__(self, obs_dim: int, center=None, scale=None, clip: float = 10.0):
+        super().__init__()
+        c = torch.zeros(obs_dim) if center is None else torch.as_tensor(center, dtype=torch.float32)
+        sc = torch.ones(obs_dim) if scale is None else torch.as_tensor(scale, dtype=torch.float32)
+        self.register_buffer("center", c.clone())
+        self.register_buffer("scale", sc.clone())
+        self.clip = float(clip) if center is not None else 0.0
+
+    def forward(self, x):
+        x = (x - self.center) / self.scale
+        return x.clamp(-self.clip, self.clip) if self.clip > 0 else x
+
+
 class Actor(nn.Module):
     """Deterministic policy, output u in [-1, 1] (env action = (u + 1) / 2)."""
 
-    def __init__(self, obs_dim: int, sizes: Sequence[int] = (256, 256, 256)):
+    def __init__(self, obs_dim: int, sizes: Sequence[int] = (256, 256, 256), norm: ObsNormalizer = None):
         super().__init__()
+        self.norm_in = norm if norm is not None else ObsNormalizer(obs_dim)
         self.body = LayerNormMLP(obs_dim, sizes)
         self.head = nn.Linear(self.body.out_dim, 1)
         _truncated_normal_fan_in_(self.head.weight, 1e-4)  # acme NearZeroInitializedLinear
         nn.init.zeros_(self.head.bias)
 
+    def preact(self, obs):
+        return self.head(self.body(self.norm_in(obs)))
+
     def forward(self, obs):
-        return torch.tanh(self.head(self.body(obs)))
+        return torch.tanh(self.preact(obs))
 
 
 def quantile_grid(interval: float = 0.01):
@@ -85,8 +107,10 @@ def quantile_grid(interval: float = 0.01):
 class QuantileCritic(nn.Module):
     """Returns the quantile values Z(s, a) of shape (batch, n_quantiles)."""
 
-    def __init__(self, obs_dim: int, sizes: Sequence[int] = (512, 512, 256), quantile_interval: float = 0.01):
+    def __init__(self, obs_dim: int, sizes: Sequence[int] = (512, 512, 256), quantile_interval: float = 0.01,
+                 norm: ObsNormalizer = None):
         super().__init__()
+        self.norm_in = norm if norm is not None else ObsNormalizer(obs_dim)
         q, p = quantile_grid(quantile_interval)
         self.register_buffer("quantiles", torch.tensor(q, dtype=torch.float32))
         self.register_buffer("probs", torch.tensor(p, dtype=torch.float32))
@@ -96,4 +120,4 @@ class QuantileCritic(nn.Module):
         nn.init.zeros_(self.head.bias)
 
     def forward(self, obs, action):
-        return self.head(self.body(torch.cat([obs, action], dim=-1)))
+        return self.head(self.body(torch.cat([self.norm_in(obs), action], dim=-1)))
