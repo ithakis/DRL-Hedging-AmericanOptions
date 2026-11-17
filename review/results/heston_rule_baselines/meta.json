@@ -1,0 +1,9 @@
+{
+  "n_paths": 8192,
+  "val_seed": 2025,
+  "test_seed": 654,
+  "n_boot": 1000,
+  "grid_size": 1089,
+  "seconds": 520.2220764160156,
+  "market_build_seconds": 25.620992183685303
+}

@@ -94,6 +94,7 @@ flags.DEFINE_float('importance_sampling_exponent', 0.2, 'Importance sampling exp
 
 # New Flag for Portfolio Folder
 flags.DEFINE_string('portfolio_folder', None, 'Full path to the main portfolio folder to load or create')
+flags.DEFINE_string('pricing_backend', 'quantlib', 'Heston American pricing: quantlib (FD solve per option) or table (precomputed, environment/heston_table.py)')
 
 def make_logger(work_folder, label, terminal=False):
     log_dir = str(Path('./logs') / work_folder)  # Convert Path to string
@@ -361,7 +362,7 @@ def main(argv):
         numerical_accuracy=FLAGS.numerical_accuracy, n_jobs=FLAGS.n_jobs, np_seed=FLAGS.train_seed,
 
         # RL Environment Parameters
-        action_low=float(FLAGS.action_space[0]), action_high=float(FLAGS.action_space[1]),
+        action_low=float(FLAGS.action_space[0]), action_high=float(FLAGS.action_space[1]), pricing_backend=FLAGS.pricing_backend,
     )
     ##############################################################################################################################
     
@@ -387,7 +388,7 @@ def main(argv):
         numerical_accuracy=FLAGS.numerical_accuracy, n_jobs=FLAGS.n_jobs, np_seed=FLAGS.eval_seed,
 
         # RL Environment Parameters
-        action_low=float(FLAGS.action_space[0]), action_high=float(FLAGS.action_space[1]),
+        action_low=float(FLAGS.action_space[0]), action_high=float(FLAGS.action_space[1]), pricing_backend=FLAGS.pricing_backend,
     )
     ##############################################################################################################################
     

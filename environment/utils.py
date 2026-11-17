@@ -203,6 +203,10 @@ class Utils:
         # RL Environment Parameters
         action_low=0,
         action_high=3,
+        # Heston American pricing backend: 'quantlib' (one FD solve per option, original)
+        # or 'table' (precomputed price/Greeks table, see environment/heston_table.py)
+        pricing_backend: str = "quantlib",
+        table_dir: str = None,
     ):
         """
         Initializes the parameters and configurations for the utility functions in the simulation environment.
@@ -269,6 +273,11 @@ class Utils:
             Lower bound for the action space in the reinforcement learning environment. Default is 0.
         action_high : float, optional
             Upper bound for the action space in the reinforcement learning environment. Default is 3.
+        pricing_backend : str, optional
+            'quantlib' (default): price each Heston American option with its own QuantLib FD solve.
+            'table': interpolate a precomputed QuantLib table (environment/heston_table.py).
+        table_dir : str, optional
+            Folder for the cached Heston tables (default: ./pricing_tables).
 
         Attributes
         ----------
@@ -328,6 +337,29 @@ class Utils:
         # min volatility in case the QE scheme generates negative non possitive values
         self._min_vol = 0.00001
 
+        if pricing_backend not in ("quantlib", "table"):
+            raise ValueError("pricing_backend must be 'quantlib' or 'table'.")
+        self.pricing_backend = pricing_backend
+        self.table_dir = table_dir
+        self._heston_table = None
+
+    def __getstate__(self):
+        # the interpolation table is rebuilt from its cache file, do not pickle it
+        state = self.__dict__.copy()
+        state["_heston_table"] = None
+        return state
+
+    def heston_table(self):
+        """Load (or build once) the Heston American put table for this parameter set."""
+        if self._heston_table is None:
+            from environment.heston_table import HestonAmericanPutTable, HestonTableConfig
+
+            cfg = HestonTableConfig.from_utils(self)
+            self._heston_table = HestonAmericanPutTable.load_or_build(
+                cfg, table_dir=self.table_dir, n_jobs=self.n_jobs
+            )
+        return self._heston_table
+
     def get_params(self):
         """
         Returns the initialized parameters and configurations for the utility functions in the simulation environment.
@@ -363,6 +395,7 @@ class Utils:
             "contract_size": self.contract_size,
             "action_low": self.action_low,
             "action_high": self.action_high,
+            "pricing_backend": getattr(self, "pricing_backend", "quantlib"),
         }
 
     def __eq__(self, other):
@@ -977,7 +1010,7 @@ class Utils:
                 batch_size=100,
                 timeout=120,
                 mmap_mode="r",
-                temp_folder="/home/atsoskouno/data/storageith2/gamma-vega-hedging-American-Heston/.temp_dir_loky",
+                temp_folder=None,
                 # max_nbytes='200000M'
                 # inner_max_num_threads=1,
             )(delayed(calculate_gbm_option)(idx) for idx in active_indices)
@@ -990,6 +1023,11 @@ class Utils:
                 vega[idx] = vega_val
             del results
             gc.collect()
+
+        elif stochastic_process == "Heston" and getattr(self, "pricing_backend", "quantlib") == "table":
+            # Precomputed QuantLib table (same engine, same Greek definitions), vectorised.
+            # ttm == 0 -> payoff, ttm < 0 -> zeros, as in the QuantLib branch below.
+            price, delta, gamma, vega = self.heston_table().evaluate(S0, K, ttms, iv)
 
         elif stochastic_process == "Heston":
             N_gridpoints = 50 if self.numerical_accuracy == "low" else 110
@@ -1047,7 +1085,7 @@ class Utils:
                 batch_size=100,
                 timeout=120,
                 mmap_mode="r",
-                temp_folder="/home/atsoskouno/data/storageith2/gamma-vega-hedging-American-Heston/.temp_dir_loky",
+                temp_folder=None,
                 # inner_max_num_threads=1,
             )(delayed(calculate_heston_option)(idx) for idx in active_indices)
 
@@ -1435,7 +1473,7 @@ class Utils:
                 batch_size=100,
                 timeout=120,
                 mmap_mode="r",
-                temp_folder="/home/atsoskouno/data/storageith2/gamma-vega-hedging-American-Heston/.temp_dir_loky",
+                temp_folder=None,
                 # inner_max_num_threads=1,
             )(delayed(calculate_heston_option)(idx) for idx in active_indices)
 
