@@ -23,7 +23,7 @@ import numpy as np
 import torch
 
 from .distributional import RiskObjective, quantile_huber_loss
-from .networks import Actor, QuantileCritic
+from .networks import Actor, ObsNormalizer, QuantileCritic
 from .replay_buffer import CircularReplayBuffer
 
 
@@ -32,7 +32,7 @@ class D4PGQR:
                  actor_sizes=(256, 256, 256), critic_sizes=(512, 512, 256), lr=1e-4,
                  batch_size=256, n_step=5, discount=1.0, sigma=0.3, target_update_period=100,
                  min_replay_size=1000, samples_per_insert=32.0, max_replay_size=1_000_000,
-                 clip_norm=40.0, dqda_clip=1.0, obs_scale=None):
+                 clip_norm=40.0, dqda_clip=1.0, obs_center=None, obs_scale=None, obs_clip=10.0):
         torch.manual_seed(seed)
         self.rng = np.random.default_rng(seed)
         self.cfg = dict(obs_dim=obs_dim, obj_func=obj_func, threshold=threshold, std_coef=std_coef, seed=seed,
@@ -40,9 +40,12 @@ class D4PGQR:
                         batch_size=batch_size, n_step=n_step, discount=discount, sigma=sigma,
                         target_update_period=target_update_period, min_replay_size=min_replay_size,
                         samples_per_insert=samples_per_insert, max_replay_size=max_replay_size,
-                        clip_norm=clip_norm, dqda_clip=dqda_clip)
-        self.actor = Actor(obs_dim, actor_sizes)
-        self.critic = QuantileCritic(obs_dim, critic_sizes)
+                        clip_norm=clip_norm, dqda_clip=dqda_clip,
+                        obs_center=None if obs_center is None else [float(x) for x in obs_center],
+                        obs_scale=None if obs_scale is None else [float(x) for x in obs_scale],
+                        obs_clip=obs_clip)
+        self.actor = Actor(obs_dim, actor_sizes, ObsNormalizer(obs_dim, obs_center, obs_scale, obs_clip))
+        self.critic = QuantileCritic(obs_dim, critic_sizes, norm=ObsNormalizer(obs_dim, obs_center, obs_scale, obs_clip))
         self.actor_target = copy.deepcopy(self.actor)
         self.critic_target = copy.deepcopy(self.critic)
         for p in [*self.actor_target.parameters(), *self.critic_target.parameters()]:
@@ -137,7 +140,8 @@ class D4PGQR:
     def load_actor(cls, path):
         ck = torch.load(path, map_location="cpu", weights_only=False)
         cfg = ck["cfg"]
-        actor = Actor(cfg["obs_dim"], cfg["actor_sizes"])
+        actor = Actor(cfg["obs_dim"], cfg["actor_sizes"],
+                      ObsNormalizer(cfg["obs_dim"], cfg.get("obs_center"), cfg.get("obs_scale"), cfg.get("obs_clip", 10.0)))
         actor.load_state_dict(ck["actor"])
         return actor, cfg
 
@@ -145,7 +149,9 @@ class D4PGQR:
 def export_actor_npz(actor: Actor, path, meta: dict):
     """Write the policy as plain arrays (see tools/evaluate_policy_numpy.py for the forward pass)."""
     sd = {k: v.detach().cpu().numpy().astype(np.float64) for k, v in actor.state_dict().items()}
-    arrays = {"W0": sd["body.first.weight"].T, "b0": sd["body.first.bias"],
+    arrays = {"obs_center": sd["norm_in.center"], "obs_scale": sd["norm_in.scale"],
+              "obs_clip": np.array(actor.norm_in.clip),
+              "W0": sd["body.first.weight"].T, "b0": sd["body.first.bias"],
               "ln_gamma": sd["body.norm.weight"], "ln_beta": sd["body.norm.bias"],
               "ln_eps": np.array(actor.body.norm.eps)}
     i = 1
@@ -157,7 +163,8 @@ def export_actor_npz(actor: Actor, path, meta: dict):
     arrays["b_out"] = sd["head.bias"]
     arrays["n_hidden"] = np.array(i)
     meta = dict(meta)
-    meta.setdefault("forward", "h=tanh(LayerNorm(x@W0+b0)); h=elu(h@Wi+bi) for i=1..n_hidden-1; "
+    meta.setdefault("forward", "x=(obs-obs_center)/obs_scale, clipped to +-obs_clip if obs_clip>0; "
+                               "h=tanh(LayerNorm(x@W0+b0)); h=elu(h@Wi+bi) for i=1..n_hidden-1; "
                                "u=tanh(h@W_out+b_out); hedge fraction a=(u+1)/2")
     arrays["meta_json"] = np.array(json.dumps(meta, default=str))
     Path(path).parent.mkdir(parents=True, exist_ok=True)

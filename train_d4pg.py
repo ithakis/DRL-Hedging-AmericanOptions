@@ -103,6 +103,9 @@ def get_args(argv=None):
     g.add_argument("--min_replay_size", type=int, default=1000)
     g.add_argument("--actor_sizes", type=int_list, default=[256, 256, 256])
     g.add_argument("--critic_sizes", type=int_list, default=[512, 512, 256])
+    g.add_argument("--obs_norm", choices=["robust", "none"], default="robust",
+                   help="robust: (obs - median) / IQR from training paths, clipped to +-10 (swing D4PG "
+                        "RobustNormalizer). none: raw state as in the acme agent (actor saturates)")
     g.add_argument("--torch_threads", type=int, default=1, help="1 is fastest for these small batches; "
                    "run several agents in parallel instead")
 
@@ -142,8 +145,26 @@ def get_market(a, seed, n):
     return load_or_build_market(u, a.market_dir)
 
 
-def evaluate(agent_or_actor, market, spread, vega_obs, chunk=8192):
-    """Greedy policy on all paths of a market. Returns episode P&L and option costs."""
+def obs_stats(market, spread, vega_obs, n_paths=4096, seed=0):
+    """Median and IQR of the state on TRAINING paths, under uniform random hedge fractions.
+    The terminal state (gamma/vega set to 0) is left out."""
+    env = HedgingEnv(market, spread, vega_obs)
+    idx = np.arange(min(n_paths, env.P))
+    rng = np.random.default_rng(seed)
+    obs, rows, done = env.reset(idx), [], False
+    while not done:
+        rows.append(obs)
+        obs, _, done, _ = env.step(rng.uniform(0, 1, len(idx)))
+    x = np.concatenate(rows)
+    med = np.median(x, axis=0)
+    iqr = np.quantile(x, 0.75, axis=0) - np.quantile(x, 0.25, axis=0)
+    iqr = np.where(iqr > 1e-8, iqr, np.maximum(x.std(axis=0), 1e-8))
+    return med, iqr
+
+
+def evaluate(agent_or_actor, market, spread, vega_obs, chunk=8192, actions=None):
+    """Greedy policy on all paths of a market. Returns episode P&L and option costs.
+    If a list is passed as `actions`, the hedge fractions are appended to it."""
     actor = agent_or_actor.actor if hasattr(agent_or_actor, "actor") else agent_or_actor
     env = HedgingEnv(market, spread, vega_obs)
     pnl, cost = [], []
@@ -156,7 +177,10 @@ def evaluate(agent_or_actor, market, spread, vega_obs, chunk=8192):
             with torch.inference_mode():
                 u = actor(torch.as_tensor(obs, dtype=torch.float32)).numpy()
             x_before = env.t
-            obs, r, done, x = env.step((u[:, 0] + 1.0) / 2.0)
+            frac = (u[:, 0] + 1.0) / 2.0
+            if actions is not None:
+                actions.append(frac)
+            obs, r, done, x = env.step(frac)
             tot += r
             c += np.abs(spread * x * env.b["h_price"][:, x_before, x_before])
         pnl.append(tot)
@@ -182,10 +206,15 @@ def main(argv=None):
     numba.set_num_threads(max(1, min(a.torch_threads, numba.config.NUMBA_NUM_THREADS)))
 
     env = HedgingEnv(train_m, a.spread, a.vega_obs)
+    center = scale = None
+    if a.obs_norm == "robust":
+        center, scale = obs_stats(train_m, a.spread, a.vega_obs, seed=a.market_seed)
+        print("obs median", np.round(center, 4), "IQR", np.round(scale, 4))
     agent = D4PGQR(env.obs_dim, obj_func=a.obj_func, threshold=a.threshold, std_coef=a.std_coef, seed=a.seed,
                    actor_sizes=a.actor_sizes, critic_sizes=a.critic_sizes, lr=a.lr, batch_size=a.batch_size,
                    n_step=a.n_step, sigma=a.sigma, target_update_period=a.target_update_period,
-                   min_replay_size=a.min_replay_size, samples_per_insert=a.samples_per_insert)
+                   min_replay_size=a.min_replay_size, samples_per_insert=a.samples_per_insert,
+                   obs_center=center, obs_scale=scale)
 
     rows, best = [], dict(score=np.inf)
     t_train, t_val, ep_rewards = 0.0, 0.0, []
@@ -202,20 +231,26 @@ def main(argv=None):
         if (ep + 1) % a.val_every == 0 or ep + 1 == a.train_episodes:
             t_train += time.time() - tic
             tv = time.time()
-            pnl, cost = evaluate(agent, val_m, a.spread, a.vega_obs)
+            acts = []
+            pnl, cost = evaluate(agent, val_m, a.spread, a.vega_obs, actions=acts)
+            acts = np.concatenate(acts)
             score = float(objective_value(pnl, a.obj_func, a.threshold, a.std_coef))
             s = summarize(pnl, cost, n_boot=200)
             t_val += time.time() - tv
             row = dict(episode=ep + 1, train_seconds=t_train, val_score=score,
                        train_mean_pnl_last=float(np.mean(ep_rewards[-a.val_every:])),
                        learner_steps=agent.learner_steps, critic_loss=agent.last_losses[0],
-                       actor_loss=agent.last_losses[1],
+                       actor_loss=agent.last_losses[1], act_mean=float(acts.mean()),
+                       act_std=float(acts.std()), act_share_0=float((acts < 0.01).mean()),
+                       act_share_1=float((acts > 0.99).mean()),
                        **{f"val_{k}": s[k] for k in ["mean_pnl", "std_pnl", "VaR95", "CVaR95", "mean_cost"]})
             rows.append(row)
             if score < best["score"]:
                 best = dict(score=score, episode=ep + 1, actor=agent.actor_state())
             print(f"ep {ep + 1:6d} | {t_train:7.1f}s train | val {a.obj_func} score {score:8.3f} "
                   f"(VaR95 {s['VaR95']:.2f}, CVaR95 {s['CVaR95']:.2f}, mean {s['mean_pnl']:.2f}) "
+                  f"| action mean {acts.mean():.3f}, <0.01 {100 * (acts < 0.01).mean():.0f}%, "
+                  f">0.99 {100 * (acts > 0.99).mean():.0f}% "
                   f"| best ep {best['episode']}", flush=True)
             pd.DataFrame(rows).to_csv(out / "validation.csv", index=False)
             tic = time.time()

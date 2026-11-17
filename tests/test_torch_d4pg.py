@@ -101,7 +101,8 @@ def test_env_matches_mainportfolio(process, vega_obs, extra, n):
 def test_numpy_evaluator_matches_torch(tmp_path):
     u = small_utils("Heston", n=64)
     m = build_market(u)
-    agent = D4PGQR(5, seed=3)
+    center, scale = train_d4pg.obs_stats(m, 0.01, True)
+    agent = D4PGQR(5, seed=3, obs_center=center, obs_scale=scale)
     with torch.no_grad():  # make the policy non-trivial
         agent.actor.head.weight.normal_(0, 0.5)
     pnl_t, cost_t = train_d4pg.evaluate(agent, m, 0.01, True)
