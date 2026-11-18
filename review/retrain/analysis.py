@@ -247,6 +247,8 @@ def cmd_main(args):
             np.savez_compressed(OUT / f"rl_test_{blk}_{spread}_{label}.npz", **{k: v for k, v in res.items()
                                                                               if isinstance(v, np.ndarray)})
             s = summary(res, spread)
+            if not vega_obs:  # Black-Scholes: no vega risk, the vega ratio is not meaningful
+                s["vega_ratio"] = float("nan")
             p = net(res, spread)
             g_dg = paired_gain(p_dg, p)
             g_rule = paired_gain(p_rule, p)
