@@ -1,0 +1,27 @@
+{
+  "run_name": "BS_var_spread0.02_seed5",
+  "selected_episode": 31000,
+  "val_score": 12.86041246322621,
+  "seconds_market": 0.02382516860961914,
+  "seconds_train": 3595.395492553711,
+  "seconds_validation": 72.22204208374023,
+  "seconds_per_1000_episodes": 89.88488731384277,
+  "learner_steps": 149876,
+  "torch_threads": 1,
+  "cpu_count": 8,
+  "test": {
+    "n_paths": 8192.0,
+    "mean_pnl": -5.762672095432661,
+    "mean_pnl_se": 0.04846671824787496,
+    "std_pnl": 4.38643882577832,
+    "std_pnl_se": 0.04067620549329294,
+    "VaR95": 13.005664613309841,
+    "VaR95_se": 0.12106351550375771,
+    "CVaR95": 15.374001010231966,
+    "CVaR95_se": 0.16186316774065154,
+    "meanstd": -12.978363963837996,
+    "meanstd_se": 0.08555168360792596,
+    "mean_cost": 5.751973489766534,
+    "mean_cost_se": 0.02301640272145156
+  }
+}

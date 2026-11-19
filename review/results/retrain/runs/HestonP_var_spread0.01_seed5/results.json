@@ -1,0 +1,27 @@
+{
+  "run_name": "HestonP_var_spread0.01_seed5",
+  "selected_episode": 28000,
+  "val_score": 30.079958343591493,
+  "seconds_market": 0.023797035217285156,
+  "seconds_train": 6779.459557294846,
+  "seconds_validation": 129.17559957504272,
+  "seconds_per_1000_episodes": 169.48648893237115,
+  "learner_steps": 149876,
+  "torch_threads": 1,
+  "cpu_count": 8,
+  "test": {
+    "n_paths": 8192.0,
+    "mean_pnl": -5.965448847792999,
+    "mean_pnl_se": 0.17343455882766723,
+    "std_pnl": 15.696546208939353,
+    "std_pnl_se": 0.2480708709630782,
+    "VaR95": 30.142796820532165,
+    "VaR95_se": 0.5573284598201802,
+    "CVaR95": 41.48309527297661,
+    "CVaR95_se": 0.7632653069331844,
+    "meanstd": -31.786267361498233,
+    "meanstd_se": 0.42051131953855236,
+    "mean_cost": 6.830570774515529,
+    "mean_cost_se": 0.02103127954749446
+  }
+}
