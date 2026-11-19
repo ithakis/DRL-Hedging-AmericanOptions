@@ -11,6 +11,10 @@ export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMBA_NUM_THREADS=1
 for V in $VARIANT; do VARIANT=$V; case $V in
   res05) EXTRA="--residual_scale 0.5 --actor_freeze_episodes 2000 --val_at_start" ;;
   res02) EXTRA="--residual_scale 0.2 --actor_freeze_episodes 2000 --val_at_start" ;;
+  # pilot 2: slower, conservative actor (pilot 1 drifted away from the rule as soon as the actor learned)
+  res02lr) EXTRA="--residual_scale 0.2 --actor_lr 1e-5 --actor_freeze_episodes 2000 --val_at_start --train_episodes 20000" ;;
+  res05l2) EXTRA="--residual_scale 0.5 --actor_lr 1e-5 --residual_l2 2 --actor_freeze_episodes 2000 --val_at_start --train_episodes 20000" ;;
+  *) echo "unknown variant $V" >&2; exit 1 ;;
 esac
 for seed in $SEEDS; do for c in 0.005 0.01 0.02; do
   case $c in 0.005) R=0.3,0.3,0.3;; 0.01) R=0.3,0.3,0.5;; 0.02) R=0.2,0.3,1.0;; esac

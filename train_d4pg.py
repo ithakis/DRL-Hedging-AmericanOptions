@@ -116,6 +116,10 @@ def get_args(argv=None):
     g.add_argument("--residual_scale", type=float, default=1.0)
     g.add_argument("--actor_freeze_episodes", type=int, default=0,
                    help="first episodes: critic learns, actor is not updated (critic warm-up on the rule)")
+    g.add_argument("--residual_l2", type=float, default=0.0,
+                   help="actor loss + residual_l2 * 0.5 u^2: keeps the residual small (stay near the rule) "
+                        "unless the critic gradient is larger (TD3+BC-like)")
+    g.add_argument("--actor_lr", type=float, default=None, help="default = --lr")
     g.add_argument("--val_at_start", action="store_true",
                    help="also validate the untrained policy (episode 0, = the rule when --warm_rule); "
                         "logged only, never selected")
@@ -233,7 +237,7 @@ def main(argv=None):
                    actor_sizes=a.actor_sizes, critic_sizes=a.critic_sizes, lr=a.lr, batch_size=a.batch_size,
                    n_step=a.n_step, sigma=a.sigma, target_update_period=a.target_update_period,
                    min_replay_size=a.min_replay_size, samples_per_insert=a.samples_per_insert,
-                   obs_center=center, obs_scale=scale)
+                   obs_center=center, obs_scale=scale, actor_lr=a.actor_lr, residual_l2=a.residual_l2)
 
     rows, best = [], dict(score=np.inf)
     t_train, t_val, ep_rewards = 0.0, 0.0, []
@@ -276,7 +280,8 @@ def main(argv=None):
                        act_share_1=float((acts > 0.99).mean()),
                        **{f"val_{k}": s[k] for k in ["mean_pnl", "std_pnl", "VaR95", "CVaR95", "mean_cost"]})
             rows.append(row)
-            if score < best["score"]:
+            # checkpoints with a frozen actor are the untrained policy (= the rule when --warm_rule): not selectable
+            if score < best["score"] and ep + 1 > a.actor_freeze_episodes:
                 best = dict(score=score, episode=ep + 1, actor=agent.actor_state())
             print(f"ep {ep + 1:6d} | {t_train:7.1f}s train | val {a.obj_func} score {score:8.3f} "
                   f"(VaR95 {s['VaR95']:.2f}, CVaR95 {s['CVaR95']:.2f}, mean {s['mean_pnl']:.2f}) "

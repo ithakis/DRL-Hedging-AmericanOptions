@@ -32,7 +32,8 @@ class D4PGQR:
                  actor_sizes=(256, 256, 256), critic_sizes=(512, 512, 256), lr=1e-4,
                  batch_size=256, n_step=5, discount=1.0, sigma=0.3, target_update_period=100,
                  min_replay_size=1000, samples_per_insert=32.0, max_replay_size=1_000_000,
-                 clip_norm=40.0, dqda_clip=1.0, obs_center=None, obs_scale=None, obs_clip=10.0):
+                 clip_norm=40.0, dqda_clip=1.0, obs_center=None, obs_scale=None, obs_clip=10.0,
+                 actor_lr=None, residual_l2=0.0):
         torch.manual_seed(seed)
         self.rng = np.random.default_rng(seed)
         self.cfg = dict(obs_dim=obs_dim, obj_func=obj_func, threshold=threshold, std_coef=std_coef, seed=seed,
@@ -43,14 +44,14 @@ class D4PGQR:
                         clip_norm=clip_norm, dqda_clip=dqda_clip,
                         obs_center=None if obs_center is None else [float(x) for x in obs_center],
                         obs_scale=None if obs_scale is None else [float(x) for x in obs_scale],
-                        obs_clip=obs_clip)
+                        obs_clip=obs_clip, actor_lr=actor_lr, residual_l2=residual_l2)
         self.actor = Actor(obs_dim, actor_sizes, ObsNormalizer(obs_dim, obs_center, obs_scale, obs_clip))
         self.critic = QuantileCritic(obs_dim, critic_sizes, norm=ObsNormalizer(obs_dim, obs_center, obs_scale, obs_clip))
         self.actor_target = copy.deepcopy(self.actor)
         self.critic_target = copy.deepcopy(self.critic)
         for p in [*self.actor_target.parameters(), *self.critic_target.parameters()]:
             p.requires_grad_(False)
-        self.actor_opt = torch.optim.Adam(self.actor.parameters(), lr=lr, eps=1e-8)
+        self.actor_opt = torch.optim.Adam(self.actor.parameters(), lr=actor_lr or lr, eps=1e-8)
         self.critic_opt = torch.optim.Adam(self.critic.parameters(), lr=lr, eps=1e-8)
         self.objective = RiskObjective(obj_func, self.critic.quantiles, self.critic.probs, threshold, std_coef)
         self.memory = CircularReplayBuffer(max_replay_size, batch_size, n_step, 1, torch.device("cpu"),
@@ -125,6 +126,8 @@ class D4PGQR:
         dqda = dqda * torch.clamp(c / dqda.norm(dim=-1, keepdim=True).clamp_min(1e-12), max=1.0)
         target = (a + dqda).detach()
         actor_loss = (0.5 * (target - a).pow(2).sum(-1)).mean()
+        if self.cfg["residual_l2"] > 0:  # pull the output (the residual on the rule) towards 0
+            actor_loss = actor_loss + self.cfg["residual_l2"] * (0.5 * a.pow(2).sum(-1)).mean()
         self.actor_opt.zero_grad(set_to_none=True)
         actor_loss.backward()
         torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.cfg["clip_norm"])
