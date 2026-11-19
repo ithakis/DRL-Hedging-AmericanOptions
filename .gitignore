@@ -67,3 +67,4 @@ Dockerfile
 
 markets/
 logs_torch/
+review/results/retrain/rl_test_*.npz
