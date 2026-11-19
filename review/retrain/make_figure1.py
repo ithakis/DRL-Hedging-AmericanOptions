@@ -91,25 +91,25 @@ def main():
     C1, C2, C3 = "tab:blue", "tab:green", "tab:orange"
 
     ax = axs[0, 0]; band(ax, rl["g_before"], "Before", C1); band(ax, rl["g_after"], "After", C2)
-    ax.set_title("Portfolio Gamma before/after hedge"); ax.set_ylabel("Gamma")
+    ax.set_title("Portfolio Gamma Before/After Hedge"); ax.set_ylabel("Gamma")
     ax = axs[0, 1]; band(ax, rl["g_hed"], "Hedging options", C1); band(ax, -rl["g_liab"], "Liability (sign flipped)", C2)
-    ax.set_title("Gamma of hedging vs liability portfolio"); ax.set_ylabel("Gamma")
+    ax.set_title("Hedging vs Liability Portfolio Gamma"); ax.set_ylabel("Gamma")
     ax = axs[1, 0]; band(ax, rl["v_before"], "Before", C1); band(ax, rl["v_after"], "After", C2)
-    ax.set_title("Portfolio Vega before/after hedge"); ax.set_ylabel("Vega")
+    ax.set_title("Portfolio Vega Before/After Hedge"); ax.set_ylabel("Vega")
     ax = axs[1, 1]; band(ax, rl["v_hed"], "Hedging options", C1); band(ax, -rl["v_liab"], "Liability (sign flipped)", C2)
-    ax.set_title("Vega of hedging vs liability portfolio"); ax.set_ylabel("Vega")
+    ax.set_title("Hedging vs Liability Portfolio Vega"); ax.set_ylabel("Vega")
 
     ax = axs[2, 0]
     d = np.arange(rl["step"].shape[1])
     for k, lab, c in (("pnl_stock", "Underlying", C1), ("pnl_liab", "Liability", C3), ("pnl_hed", "Hedging options", C2)):
         ax.plot(d, rl[k].mean(0), c=c, label=lab)
-    ax.set_title("Mean daily PnL of the portfolio components"); ax.set_ylabel("PnL")
+    ax.set_title("Portfolio Components PnL (Mean per Day)"); ax.set_ylabel("PnL")
     ax = axs[2, 1]
     for tr, lab, c in ((rl, "RL", "tab:red"), (dg, "Delta-Gamma", "tab:gray"), (rule, "Rule (b)", C2)):
         cc = np.cumsum(tr["cost"], axis=1); ax.plot(d, cc.mean(0), c=c, label=lab)
         if tr is rl:
             lo, hi = np.quantile(cc, [0.025, 0.975], axis=0); ax.fill_between(d, lo, hi, color=c, alpha=0.2)
-    ax.set_title("Cumulative option transaction costs"); ax.set_ylabel("Cost")
+    ax.set_title("Cumulative Option Transaction Costs"); ax.set_ylabel("Cost")
 
     ax = axs[3, 0]
     cum = np.cumsum(rl["step"], axis=1)
@@ -118,7 +118,7 @@ def main():
     cv = np.array([cum[cum[:, j] <= q[j], j].mean() for j in range(cum.shape[1])])
     ax.plot(d, q, c=C2, ls="--", label="5% quantile (= $-$VaR$_{95\\%}$)")
     ax.plot(d, cv, c=C3, ls=":", label="$-$CVaR$_{95\\%}$")
-    ax.set_title("Cumulative portfolio PnL (RL)"); ax.set_ylabel("PnL")
+    ax.set_title("Cumulative (Total) Portfolio PnL (RL)"); ax.set_ylabel("PnL")
 
     ax = axs[3, 1]
     lo_x, hi_x = np.inf, -np.inf
@@ -130,7 +130,7 @@ def main():
         lo_x, hi_x = min(lo_x, np.quantile(p, 0.005)), max(hi_x, np.quantile(p, 0.995))
         print(f"{lab}: VaR95 {-v:.2f} mean PnL {p.mean():.2f} E[cost] {tr['cost'].sum(1).mean():.2f}")
     ax.set_xlim(lo_x, hi_x)
-    ax.set_title("Episode PnL at $T$ (dashed: 5% quantile)"); ax.set_ylabel("Density"); ax.set_xlabel("PnL")
+    ax.set_title("Portfolio PnL at $T$ (Dashed: 5% Quantile)"); ax.set_ylabel("Density"); ax.set_xlabel("PnL")
 
     for ax in axs.flat:
         if ax is not axs[3, 1]:
