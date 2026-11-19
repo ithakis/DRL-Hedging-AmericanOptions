@@ -33,6 +33,8 @@ evaluate:                        # RL agents on the test paths; needs baselines_
 	$(A) deltacost --block B
 	$(A) robustness
 	$(A) early
+	$(A) rulesel --block A
+	$(A) rulesel --block B
 
 # ---------------------------------------------------------------- paper inputs
 tables:                          # review/results/paper/tables/*.tex (\input by main.tex)

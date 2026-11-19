@@ -7,8 +7,8 @@ which includes each file with \\input in place of the hand-typed tabular:
 
 Inputs (all in review/results/retrain): baselines_{A,B}.json, main_{A,B}.csv, deltacost_B.csv,
 robustness.csv, early_exercise_by_day.csv, early_exercise_premium.csv.
-Bold = lowest VaR95 in the row. In the robustness table a row gets no bold when the best and the
-second best strategy differ by less than 2 paired standard errors (RL vs rule (b) or RL vs DG).
+Bold = lowest VaR95 in the row (dark blue bold, as in the first version of the paper). The robustness
+table also gives the paired difference RL - rule (b) with its paired bootstrap standard error.
 """
 import json
 from pathlib import Path
@@ -30,10 +30,15 @@ def cost_label(c):
     return f"{c * 100:g}\\%"
 
 
+def bold(s):
+    """Best value: dark blue bold, the style of the result tables in the first version."""
+    return "\\textbf{\\textcolor{darkblue}{" + s + "}}"
+
+
 def var_cells(vals, ses):
     """VaR cells 'v (se)', the lowest value in bold."""
     best = min(vals)
-    return [("\\textbf{" + f2(v) + "}" if v == best else f2(v)) + f" ({f2(s)})" for v, s in zip(vals, ses)]
+    return [(bold(f2(v)) if v == best else f2(v)) + f" ({f2(s)})" for v, s in zip(vals, ses)]
 
 
 def main_table(blk):
@@ -102,19 +107,18 @@ ROB_LABEL = {"init_vol": "$\\sqrt{v_0}=%s$", "volvol": "$\\xi=%s$", "rho": "$\\r
 
 def robustness_table():
     df = pd.read_csv(RES / "robustness.csv")
-    L = [HEADER + "\\begin{tabular*}{\\tblwidth}{@{\\extracolsep{\\fill}} l cccc @{}}", "\\toprule",
-         "Market & RL & DG & Rule (b) & RL $\\mathbb{E}[\\text{TC}]$ \\\\", "\\midrule"]
+    keys = ["delta", "DG", "DV", "rule_a", "rule_b", "RL"]
+    heads = ["Delta", "DG", "DV", "Rule (a)", "Rule (b)", "RL", "RL $-$ Rule (b)", "RL $\\mathbb{E}[\\text{TC}]$"]
+    L = [HEADER + "\\begin{tabular*}{\\tblwidth}{@{\\extracolsep{\\fill}} l " + "c" * len(heads) + " @{}}",
+         "\\toprule", "Market & " + " & ".join(heads) + " \\\\", "\\midrule"]
     for i, r in df.iterrows():
         label = "Base" if r.parameter == "base" else ROB_LABEL[r.parameter] % f"{r.value:g}"
-        v = {"RL": r.RL_VaR95, "DG": r.DG_VaR95, "rule_b": r.rule_b_VaR95}
-        order = sorted(v, key=v.get)
-        best, second = order[0], order[1]
-        pair_se = {frozenset(("RL", "rule_b")): r.gain_vs_rule_b_se, frozenset(("RL", "DG")): r.gain_vs_DG_se}
-        se = pair_se.get(frozenset((best, second)), 0.0)
-        bold = best if v[second] - v[best] > 2 * se else None
-        cell = {k: ("\\textbf{" + f2(x) + "}" if k == bold else f2(x)) for k, x in v.items()}
-        L.append(f"{label} & {cell['RL']} ({f2(r.RL_VaR95_se)}) & {cell['DG']} & {cell['rule_b']} & "
-                 f"{f2(r.RL_mean_cost)} \\\\")
+        v = {k: r[f"{k}_VaR95"] for k in keys}
+        best = min(v.values())
+        cell = {k: (bold(f2(x)) if x == best else f2(x)) for k, x in v.items()}
+        cell["RL"] += f" ({f2(r.RL_VaR95_se)})"
+        diff = f"${-r.gain_vs_rule_b:+.2f}$ ({f2(r.gain_vs_rule_b_se)})"
+        L.append(f"{label} & " + " & ".join(cell[k] for k in keys) + f" & {diff} & {f2(r.RL_mean_cost)} \\\\")
         if i == 0:
             L.append("\\midrule")
     L += ["\\bottomrule", "\\end{tabular*}"]

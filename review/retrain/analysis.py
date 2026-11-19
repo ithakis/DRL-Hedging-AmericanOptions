@@ -8,6 +8,7 @@ Paths: validation seed 2025 (tuning / selection), test seed 654 (reporting), 8,1
     PYTHONPATH=. python review/retrain/analysis.py deltacost --block B    # 0/1/2/5 bp after the fact
     PYTHONPATH=. python review/retrain/analysis.py robustness             # OOD table, block-B 2% agent
     PYTHONPATH=. python review/retrain/analysis.py early                  # early-exercise diagnostic
+    PYTHONPATH=. python review/retrain/analysis.py rulesel --block B      # rules: validation vs test VaR
     PYTHONPATH=. python review/retrain/analysis.py export                 # weights/ + mapping.csv
 
 Definitions (same as experiments/heston_rule_baselines.py and torch_d4pg/metrics.py):
@@ -505,9 +506,31 @@ def cmd_export(args):
     print(f"{len(rows)} policies -> {W}")
 
 
+def cmd_rulesel(args):
+    """Selection effect of the tuned rules: VaR95 of the chosen (a, b, w) on validation vs test (0 bp).
+
+    Same check as for the agents (validation score of the selected agent vs its test score). Reads the tuned
+    parameters from baselines_{block}.json, writes rule_selection_{block}.csv. No tuning, no training.
+    """
+    blk = args.block
+    vega_obs = blk == "B"
+    base = json.load(open(OUT / f"baselines_{blk}.json"))
+    val = RolloutCache(markets(blk, which=("val",))["val"], vega_obs)
+    rows = []
+    for spread in COSTS:
+        for kind in ("a", "b"):
+            r = base[f"{spread}_0"][f"rule_{kind}_VaR95"]
+            v, _ = var_cvar(net(val.frac(r["a"], r["b"], r["w"]), spread))
+            rows.append(dict(block=blk, spread=spread, rule=kind, a=r["a"], b=r["b"], w=r["w"],
+                             val_VaR95=float(v), test_VaR95=r["VaR95"], test_minus_val=r["VaR95"] - float(v)))
+    df = pd.DataFrame(rows)
+    df.to_csv(OUT / f"rule_selection_{blk}.csv", index=False)
+    print(df.round(3).to_string(index=False))
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["rules", "main", "deltacost", "robustness", "early", "export"])
+    ap.add_argument("cmd", choices=["rules", "main", "deltacost", "robustness", "early", "export", "rulesel"])
     ap.add_argument("--block", choices=["A", "B"], default="B")
     a = ap.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
