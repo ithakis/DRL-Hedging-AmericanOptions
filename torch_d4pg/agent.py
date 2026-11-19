@@ -60,6 +60,7 @@ class D4PGQR:
         self.n_observed = 0
         self.learner_steps = 0
         self.last_losses = (np.nan, np.nan)
+        self.train_actor = True  # False: critic-only learner steps (warm-up)
 
     # ------------------------------------------------------------------ acting
     @torch.inference_mode()
@@ -111,6 +112,9 @@ class D4PGQR:
         torch.nn.utils.clip_grad_norm_(self.critic.parameters(), self.cfg["clip_norm"])
         self.critic_opt.step()
 
+        if not self.train_actor:
+            self.last_losses = (float(critic_loss.detach()), np.nan)
+            return
         # actor (trfl/acme dpg loss with dqda clipping)
         a = self.actor(o_t)
         a_det = a.detach().requires_grad_(True)

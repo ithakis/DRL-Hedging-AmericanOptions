@@ -83,3 +83,39 @@ class HedgingEnv:
         self.t = t + 1
         done = self.t == self.T
         return self._obs(), cost + pnl, done, x
+
+
+class ResidualRuleEnv(HedgingEnv):
+    """Warm start from a tuned rule: the agent learns a correction on top of rule (b).
+
+    rule (b):  x_rule = clip(a n_G + b n_V, [lo, hi]),  x_rule = 0 if |x_rule| < w  (contracts)
+               f_rule = (x_rule - lo) / (hi - lo)       (the same trade as a hedge fraction)
+    agent:     u = 2 action - 1 in [-1, 1]  (action = the agent's usual fraction (u + 1) / 2)
+    traded:    f = clip(f_rule + scale * u, 0, 1)
+    An actor with output u = 0 (the near-zero initialised head) plays exactly the rule.
+    The rule only uses the state (n_G = -Gamma / gamma^h, n_V = -Vega / vega^h), so the policy stays Markov.
+    """
+
+    def __init__(self, market, spread: float, vega_obs: bool, rule=(0.0, 0.0, 0.0), scale: float = 1.0):
+        super().__init__(market, spread, vega_obs)
+        self.rule_a, self.rule_b, self.rule_w = (float(x) for x in rule)
+        self.scale = float(scale)
+        self.last_frac = None
+
+    def rule_fraction(self):
+        t, b = self.t, self.b
+        G, V = self._port(t)
+        lo, hi = self.bounds()
+        with np.errstate(divide="ignore", invalid="ignore"):
+            n_g = np.nan_to_num(-G / b["h_gamma"][:, t, t], nan=0.0)
+            n_v = np.nan_to_num(-V / b["h_vega"][:, t, t], nan=0.0) if self.vega_obs else np.zeros_like(n_g)
+            x = np.clip(self.rule_a * n_g + self.rule_b * n_v, lo, hi)
+            x = np.where(np.abs(x) < self.rule_w, 0.0, x)
+            f = np.where(hi > lo, (x - lo) / (hi - lo), 0.0)
+        return np.clip(np.nan_to_num(f, nan=0.0), 0.0, 1.0)
+
+    def step(self, action):
+        u = 2.0 * np.clip(np.asarray(action, dtype=float).reshape(self.B), 0.0, 1.0) - 1.0
+        f = np.clip(self.rule_fraction() + self.scale * u, 0.0, 1.0)
+        self.last_frac = f
+        return super().step(f)

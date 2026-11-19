@@ -31,7 +31,7 @@ import torch
 from environment.market import load_or_build_market, save_market_npz
 from environment.utils import Utils
 from torch_d4pg.agent import D4PGQR, export_actor_npz
-from torch_d4pg.hedge_env import HedgingEnv
+from torch_d4pg.hedge_env import HedgingEnv, ResidualRuleEnv
 from torch_d4pg.metrics import objective_value, summarize
 
 
@@ -109,6 +109,17 @@ def get_args(argv=None):
     g.add_argument("--torch_threads", type=int, default=1, help="1 is fastest for these small batches; "
                    "run several agents in parallel instead")
 
+    g = ap.add_argument_group("warm start from a tuned rule (off by default)")
+    g.add_argument("--warm_rule", default=None,
+                   help="'a,b,w' of rule (b): the agent learns a residual u on top of the rule, traded fraction "
+                        "= clip(f_rule + residual_scale * u, 0, 1) (torch_d4pg.hedge_env.ResidualRuleEnv)")
+    g.add_argument("--residual_scale", type=float, default=1.0)
+    g.add_argument("--actor_freeze_episodes", type=int, default=0,
+                   help="first episodes: critic learns, actor is not updated (critic warm-up on the rule)")
+    g.add_argument("--val_at_start", action="store_true",
+                   help="also validate the untrained policy (episode 0, = the rule when --warm_rule); "
+                        "logged only, never selected")
+
     g = ap.add_argument_group("output")
     g.add_argument("--out", default="logs_torch")
     g.add_argument("--run_name", default=None)
@@ -162,11 +173,19 @@ def obs_stats(market, spread, vega_obs, n_paths=4096, seed=0):
     return med, iqr
 
 
-def evaluate(agent_or_actor, market, spread, vega_obs, chunk=8192, actions=None):
+def make_env(market, spread, vega_obs, a=None):
+    """HedgingEnv, or the residual-on-rule environment when a.warm_rule is set."""
+    if a is not None and getattr(a, "warm_rule", None):
+        rule = [float(x) for x in str(a.warm_rule).split(",")]
+        return ResidualRuleEnv(market, spread, vega_obs, rule, a.residual_scale)
+    return HedgingEnv(market, spread, vega_obs)
+
+
+def evaluate(agent_or_actor, market, spread, vega_obs, chunk=8192, actions=None, a=None):
     """Greedy policy on all paths of a market. Returns episode P&L and option costs.
     If a list is passed as `actions`, the hedge fractions are appended to it."""
     actor = agent_or_actor.actor if hasattr(agent_or_actor, "actor") else agent_or_actor
-    env = HedgingEnv(market, spread, vega_obs)
+    env = make_env(market, spread, vega_obs, a)
     pnl, cost = [], []
     for s in range(0, env.P, chunk):
         idx = np.arange(s, min(env.P, s + chunk))
@@ -178,9 +197,9 @@ def evaluate(agent_or_actor, market, spread, vega_obs, chunk=8192, actions=None)
                 u = actor(torch.as_tensor(obs, dtype=torch.float32)).numpy()
             x_before = env.t
             frac = (u[:, 0] + 1.0) / 2.0
-            if actions is not None:
-                actions.append(frac)
             obs, r, done, x = env.step(frac)
+            if actions is not None:
+                actions.append(frac if getattr(env, "last_frac", None) is None else env.last_frac)
             tot += r
             c += np.abs(spread * x * env.b["h_price"][:, x_before, x_before])
         pnl.append(tot)
@@ -205,7 +224,7 @@ def main(argv=None):
     import numba
     numba.set_num_threads(max(1, min(a.torch_threads, numba.config.NUMBA_NUM_THREADS)))
 
-    env = HedgingEnv(train_m, a.spread, a.vega_obs)
+    env = make_env(train_m, a.spread, a.vega_obs, a)
     center = scale = None
     if a.obs_norm == "robust":
         center, scale = obs_stats(train_m, a.spread, a.vega_obs, seed=a.market_seed)
@@ -218,8 +237,20 @@ def main(argv=None):
 
     rows, best = [], dict(score=np.inf)
     t_train, t_val, ep_rewards = 0.0, 0.0, []
+    if a.val_at_start:
+        acts = []
+        pnl, cost = evaluate(agent, val_m, a.spread, a.vega_obs, actions=acts, a=a)
+        acts = np.concatenate(acts)
+        s = summarize(pnl, cost, n_boot=200)
+        rows.append(dict(episode=0, train_seconds=0.0,
+                         val_score=float(objective_value(pnl, a.obj_func, a.threshold, a.std_coef)),
+                         act_mean=float(acts.mean()), act_std=float(acts.std()),
+                         **{f"val_{k}": s[k] for k in ["mean_pnl", "std_pnl", "VaR95", "CVaR95", "mean_cost"]}))
+        print(f"ep      0 (untrained, not selectable) | val VaR95 {s['VaR95']:.2f}, CVaR95 {s['CVaR95']:.2f}, "
+              f"mean {s['mean_pnl']:.2f}, action mean {acts.mean():.3f}", flush=True)
     tic = time.time()
     for ep in range(a.train_episodes):
+        agent.train_actor = ep >= a.actor_freeze_episodes
         obs = env.reset([ep % env.P])
         done, tot = False, 0.0
         while not done:
@@ -232,7 +263,7 @@ def main(argv=None):
             t_train += time.time() - tic
             tv = time.time()
             acts = []
-            pnl, cost = evaluate(agent, val_m, a.spread, a.vega_obs, actions=acts)
+            pnl, cost = evaluate(agent, val_m, a.spread, a.vega_obs, actions=acts, a=a)
             acts = np.concatenate(acts)
             score = float(objective_value(pnl, a.obj_func, a.threshold, a.std_coef))
             s = summarize(pnl, cost, n_boot=200)
@@ -260,6 +291,7 @@ def main(argv=None):
     agent.actor.load_state_dict(best["actor"])
     meta = dict(process=a.process, obj_func=a.obj_func, spread=a.spread, vega_obs=a.vega_obs,
                 seed=a.seed, selected_episode=best["episode"], val_score=best["score"],
+                warm_rule=a.warm_rule, residual_scale=a.residual_scale,
                 obs=["S", "portfolio_gamma", "hedge_gamma"] + (["portfolio_vega", "hedge_vega"] if a.vega_obs else []))
     export_actor_npz(agent.actor, out / "policy_best.npz", meta)
 
@@ -268,7 +300,7 @@ def main(argv=None):
                seconds_per_1000_episodes=1000 * t_train / a.train_episodes,
                learner_steps=agent.learner_steps, torch_threads=a.torch_threads, cpu_count=os.cpu_count())
     if test_m is not None:
-        pnl, cost = evaluate(agent, test_m, a.spread, a.vega_obs)
+        pnl, cost = evaluate(agent, test_m, a.spread, a.vega_obs, a=a)
         res["test"] = summarize(pnl, cost, n_boot=a.n_boot)
         np.save(out / "test_pnl.npy", np.c_[pnl, cost])
         print("TEST (selected checkpoint):", {k: round(v, 3) for k, v in res["test"].items()})
