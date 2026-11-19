@@ -68,3 +68,8 @@ Dockerfile
 markets/
 logs_torch/
 review/results/retrain/rl_test_*.npz
+
+# LaTeX build files of the paper
+Paper__Higher_Order_Hedging_for_Am_Opt_DRL/main.*
+!Paper__Higher_Order_Hedging_for_Am_Opt_DRL/main.tex
+logs_*.txt

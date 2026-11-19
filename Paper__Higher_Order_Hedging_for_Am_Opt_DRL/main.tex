@@ -1,0 +1,510 @@
+\documentclass[a4paper,fleqn]{cas-dc}
+
+\usepackage[numbers]{natbib}
+\usepackage{amsmath, amsfonts, amssymb}
+\usepackage{algorithm, algpseudocode}
+\usepackage{graphicx}
+\usepackage{adjustbox}
+\usepackage{xcolor}
+\usepackage{booktabs, tabularx, multirow}
+\usepackage{enumitem}
+\usepackage{ragged2e}
+\setlist{nosep}
+\newcommand*\D{\mathop{}\!\mathrm{d}}
+% Your custom definitions or commands here
+% For colouring in the results tables
+\definecolor{darkblue}{RGB}{0,0,139}
+% Define new column types for the 4th and 5th columns
+\newcolumntype{B}{>{\bfseries\textcolor{darkblue}}c}
+\newcolumntype{C}{>{\bfseries\textcolor{darkblue}}c}
+% Result tables and figures are generated (make paper, see the README); do not edit them here.
+\newcommand{\gendir}{../review/results/paper}
+% Revision (submission 4842): placeholder for numbers that will come from the new experiments.
+% Remove all \todo{} before resubmission: grep -n "\\todo" main.tex
+\newcommand{\todo}[1]{\textcolor{red}{\textbf{[TODO: #1]}}}
+
+
+\begin{document}
+
+% Title
+\shorttitle{Higher-Order Greeks Hedging of American Options with DRL}
+\shortauthors{Tsoskounoglou et~al.}
+
+\title[mode=title]{Higher-Order Greeks Hedging of American Options \newline with Deep Reinforcement Learning}
+
+% Author(s)
+\author[1]{Alexander Tsoskounoglou}[]
+\ead{alexander.tsoskounoglou@gmail.com}
+
+\author[1,2]{Sven Karbach}[]
+\ead{sven@karbach.org}
+\fnmark[1]
+
+\author[1,2]{Drona Kandhai}[]
+\ead{b.d.kandhai@uva.nl}
+\fnmark[1]
+
+\author[3]{Michel Vellekoop}[]
+\ead{m.h.vellekoop@uva.nl}
+
+\fntext[fn1]{The authors acknowledge support from the AI4FinTech initiative at the University of Amsterdam.}
+% Corresponding author
+%\cormark[1]
+%\cortext[cor1]{Corresponding author}
+
+
+\affiliation[1]{%
+  organization={Informatics Institute, University of Amsterdam},
+  addressline={LAB42, Science Park 900},
+  city={Amsterdam},
+  postcode={1098 XH},
+  country={The Netherlands}
+}
+
+\affiliation[2]{%
+  organization={Korteweg-de Vries Institute for Mathematics, University of Amsterdam},
+  addressline={Science Park 105–107},
+  city={Amsterdam},
+  postcode={1098 XG},
+  country={The Netherlands}
+}
+
+\affiliation[3]{%
+  organization={Faculty of Economics and Business, University of Amsterdam, Section Quantitative Economics},
+  addressline={Roetersstraat 11},
+  city={Amsterdam},
+  postcode={1001 NJ},
+  country={The Netherlands}
+}
+
+
+% Abstract
+\begin{abstract}
+This paper studies the hedging of a book of American put options with Gamma and Vega risk under transaction costs on options. We price the options under the Heston stochastic volatility model with the modified Craig--Sneyd scheme, and we train a distributional deep reinforcement learning (DRL) agent (D4PG-QR) that minimises the Value-at-Risk of the hedging loss. We compare the agent with full Delta-Gamma and Delta-Vega hedging and with tuned cost-aware rules that hedge a fixed fraction of the Gamma and Vega risk, with and without a no-trade band. All agents and rules are selected on validation paths and evaluated on separate test paths, with standard errors. Under Heston, the DRL agent reduces VaR$_{95\%}$ by 13--15\% compared to Delta-Gamma hedging and by 37--42\% compared to Delta-Vega hedging. A tuned two-parameter rule with a no-trade band, however, reaches a lower VaR$_{95\%}$ than the agent (by 6--9\%). Under Black--Scholes the agent and the tuned rule are almost equal. Most of the gain over full Greek neutrality therefore comes from partial hedging, which DRL learns without a hand-tuned grid. We also test the learned policy on markets with other Heston parameters (out-of-distribution generalisation): it keeps its advantage over Delta-Gamma hedging for nine of ten parameter changes, but not for a much higher initial volatility.
+\end{abstract}
+
+
+% Highlights
+%\begin{highlights}
+%\item Introduced a DRL framework for higher-order American option hedging under the Heston model.
+%\item Simulated stock trajectories using the Quadratic-Exponential scheme.
+%\item Combined MCS PDE pricing and with D4PG-QR distributional reinforcement learning.
+%\item Achieved superior tail-risk and cost performance vs. Delta-Gamma/Vega hedging.
+%\item Incorporated transaction costs and early exercise in a realistic hedging setup.
+%\item Demonstrated robustness to model misspecification in key Heston parameters.
+%\end{highlights}
+
+% Keywords
+\begin{keywords}
+Deep Reinforcement Learning \sep American Options \sep Heston Model \sep Transaction Costs \sep Hedging \sep PDE pricing
+\end{keywords}
+
+\maketitle
+
+% ===============================================================
+% ===============================================================
+% ===============================================================
+
+
+% =============================================================
+% =============================================================
+% =============================================================
+
+\section{Introduction}
+\label{Introduction}
+
+Hedging American options presents substantial challenges due to early exercise features, transaction costs and frequent rebalancing requirements. These complexities further increase when looking at portfolios of American options or the sequential issuance of option liabilities. In volatile markets, managing higher-order Greeks, particularly Gamma and Vega, is essential for further reducing risk, as Delta hedging alone is insufficient. Traditional methods for pricing American options based on binomial trees~\cite{ccr} or finite difference methods~\cite{FDM_american} have proven effective under both constant and stochastic volatility models, including the Heston framework~\cite{hestonModel}. However, when directly applied to hedging, these approaches typically assume frictionless markets and continuous trading. In practice, this leads to unrealistic strategies characterized by excessive rebalancing and elevated transaction costs, while still leaving significant tail-risk exposures unaddressed. Consequently, practical hedging demands cost-aware adaptive methods that dynamically balance risk exposure and trading efficiency.
+
+Recent advancements in \emph{Deep Reinforcement Learning} (DRL) have shown to address the complexities of hedging under realistic market conditions effectively~\cite{DH_R, DH_2}. Unlike classical methods, DRL-based strategies explicitly incorporate market frictions during policy training, enabling adaptive hedging that balances risk minimization, in particular the tail risk measured via Value-at-Risk (VaR) or Conditional VaR (CVaR), against transaction costs. However, most existing DRL literature focuses on European-style options~\cite{DH_01, DH_1, DH_3}, where early exercise is not permitted, and the associated option evaluation is comparatively simpler. Robust DRL frameworks for American-style options remain scarce~\cite{DH_A}, and most existing studies hedge only Delta or use simplified asset dynamics~\cite{buhler2019deep, zheng2023option, murray2022deep, giurca2021delta}. Most listed single-stock options are American, so we use a book of American puts under Heston as a realistic test case. Many DRL hedging studies compare only with Delta hedging or with full Greek neutrality~\cite{DH_R, DH_1}. These are weak benchmarks when trading is costly: with proportional costs the optimal hedge does not trade inside a band around the frictionless hedge~\cite{whalley1997asymptotic, imaki2021ntbn}, and a hedger that neutralises all Gamma or Vega at every step pays too much. We therefore add tuned cost-aware rules that hedge only a fraction of the risk, with and without a no-trade band, and we ask a simple question: does DRL add value over a well-tuned simple rule?
+
+\subsection{Main Contributions}
+The principal contributions of this paper are:
+
+\begin{itemize}[noitemsep, left=4pt]
+    \item \textbf{Benchmark against cost-aware rules:} We compare a distributional DRL agent (D4PG-QR~\cite{DH_1}), trained to minimise the VaR$_{95\%}$ of the hedging loss, with full Delta-Gamma and Delta-Vega hedging and with tuned fraction and no-trade-band rules. The setting is a book of American puts under Heston with proportional costs on option trades. We use a clean validation/test split, several training seeds and standard errors.
+    \item \textbf{Where the gain comes from:} We show that most of the gain over full Greek neutrality comes from hedging only a part of the Gamma and Vega risk. A tuned rule gets all of this gain; the DRL agent gets most of it without any hand design. We also show that early exercise plays a very small role in this setting.
+    \item \textbf{Out-of-distribution generalisation:} We test the trained policy on markets with other Heston parameters, with all baselines on the same paths.
+\end{itemize}
+
+\vspace{0.5em}
+\noindent The hedging environment is built with existing numerical schemes. We do not propose new numerical methods; we apply the following ones:
+
+\begin{itemize}[noitemsep, left=4pt]
+    \item \textbf{Heston simulation with the QE scheme:} We simulate the Heston paths with the Quadratic-Exponential (QE) scheme of Andersen \cite{heston_sim}. This scheme keeps the variance positive and matches the moments of the Cox--Ingersoll--Ross (CIR) variance process well. A simple Euler-Maruyama scheme can introduce a bias, so that the simulated paths are not consistent with the (calibrated) model parameters.
+    \item \textbf{American option pricing with the MCS scheme:} We price the American options and compute their Greeks under Heston with the Modified Craig--Sneyd Alternating Direction Implicit scheme \cite{MCS_og, hestonADI}. This gives stable Greeks, which we need for higher-order hedging.
+\end{itemize}
+
+\vspace{0.5em}
+\noindent Under Heston with a positive interest rate, the DRL agent reduces VaR$_{95\%}$ by 13--15\% compared to Delta-Gamma hedging and by 37--42\% compared to Delta-Vega hedging, on test paths and at all three cost levels. The tuned rule with a no-trade band is better than the agent by 1.4 to 2.6 in VaR$_{95\%}$ (6--9\%), and the difference is larger than two standard errors. Under Black--Scholes the agent is within 0.4 of the tuned rule (see Table~\ref{table:gbmtable} and Table~\ref{table:hestontableWdrift} below).
+
+\subsection{Structure of the Paper}
+\label{sec:structure}
+
+The remainder of this article is organized as follows. Section~\ref{sec:framework} formalises the hedging problem and describes the stochastic models, the option pricing scheme and the distributional DRL algorithm. Section~\ref{sec:experiments} presents the main results under Black--Scholes and under Heston with a positive interest rate and a positive equity drift, where the DRL agent is compared with Delta, Delta-Gamma, Delta-Vega and tuned cost-aware rules; it also shows the effect of costs on stock trades and the spread across training seeds. Section~\ref{sec:experiments-with-zero-drift} measures how often early exercise matters in our setting. Section~\ref{sec:robustness} tests how the policy performs when the Heston parameters of the test paths differ from the training parameters (out-of-distribution generalisation). Finally, Section~\ref{sec:conclusion} summarises the key findings, and Section~\ref{sec:FutureDirections} outlines avenues for future research.
+
+% =============================================================
+% =============================================================
+% =============================================================
+\section{Hedging Problem and DRL Framework}
+\label{sec:framework}
+
+The core objective addressed in this paper is the development of an optimal dynamic hedging strategy for a portfolio of American-style put options, with particular emphasis on managing higher-order risks, specifically Gamma and Vega. The hedging instruments to do so are the underlying asset, as well as additional American put options written on the same underlying asset. 
+
+Focusing on the higher-order aspect of the portfolio, we employ a Deep Reinforcement Learning framework that directly optimizes the sequence of hedging decisions. The DRL agent learns the optimal dynamic policy throughout the option's life-cycle including the initial hedge position $\alpha_0$ at time zero. The market dynamics are simulated with a stochastic process of choice, using a set of parameters, which are assumed to remain constant during the hedging period. More precisely, the underlying asset price process $(S_t)_{t \geq 0}$ and its instantaneous variance process $(v_t)_{t \geq 0}$ are simulated under either a stochastic volatility model, in our case the Heston model, or the Geometric Brownian Motion (GBM) as a baseline. At each discrete re-balancing interval, the agent determines the optimal quantity of hedging instruments to minimize risk exposure measured by a risk metric such as Value-at-Risk over the full hedging horizon. Option prices and Greek sensitivities are computed at each time step based on the simulated market state $(S_t, v_t)$, in addition to the fixed set of initially calibrated model parameters.
+
+
+\subsection{Modeling the Underlying (Physical Measure)}
+\label{sec:ModelAssumptions}
+In this study, we employ two primary models to simulate (underlying) asset price paths: the classical Black–Scholes (BS) model based on a GBM and the Heston stochastic volatility model. 
+
+\paragraph{Black–Scholes Model}
+Under the physical measure $\mathbb{P}$ the GBM dynamics are
+\begin{align*}
+\D S_t = S_t\,(r+\mu - q)\,\D t + S_t\,\sigma\,\D W_t, \quad t>0,
+\end{align*}
+where $\sigma$ is the constant volatility, $r$ is the risk‑free rate, $q$ is the continuous dividend yield, $\mu$ represents the excess mean rate of return on equity under~$\mathbb{P}$, and $(W_t)_{t\ge 0}$ is a standard Wiener process under $\mathbb{P}$.
+
+\paragraph{Heston Model}
+The Heston stochastic volatility model reads
+\begin{align*}
+\D S_t &= S_t\,(r+\mu - q)\,\D t + S_t\sqrt{v_t}\,\D W_t^{S}, \quad t>0,\\
+\D v_t &= \kappa_{\mathbb{P}}\big(\theta_{\mathbb{P}} - v_t\big)\,\D t + \xi \sqrt{v_t}\,\D W_t^{v}, \quad t>0,
+\end{align*}
+where $(W_t^{S})_{t\geq 0}$ and $(W_t^{v})_{t\geq 0}$ are standard Wiener processes under $\mathbb{P}$ with correlation $\rho$, i.e., $\D\langle W^{S}, W^{v}\rangle_t=\rho\,\D t$. The parameters $\xi$, $\kappa_{\mathbb{P}}$, and $\theta_{\mathbb{P}}$ denote the vol‑of‑vol, the speed of mean reversion, and the long‑run mean of the variance process under $\mathbb{P}$, respectively. The initial variance is $v_0$, so the initial volatility is $\sqrt{v_0}$. Option prices are computed under the risk-neutral measure $\mathbb{Q}$ (Section~\ref{sec:american_pricing}), where the variance has parameters $\kappa_{\mathbb{Q}}$ and $\theta_{\mathbb{Q}}$. The link between the two sets of parameters is given in Section~\ref{sec:setup}.
+
+
+\paragraph{Simulation Methods.}
+For the BS model we sample paths from its closed form solution. In contrast, Heston model paths are simulated using the robust Quadratic-Exponential (QE) scheme~\cite{heston_sim}, which is well-known for its numerical stability and its ability to preserve key distributional properties of the Heston model, including accurate moment matching of the CIR stochastic volatility process.
+
+\subsection{American Option Pricing}
+\label{sec:american_pricing}
+The valuation of American put options in the BS model is done via the binomial tree approach~\cite{ccr} using a $200$-step tree and the valuation of American put options under the Heston model is performed using the modified Craig–Sneyd finite-difference scheme~\cite{MCS_og, hestonADI}. This choice is justified due to its numerical stability, efficiency, and the accurate computation of the options sensitivities (Greeks), which is a crucial property for our higher-order hedging set-up. The scheme numerically solves the following partial differential inequality subject to an early exercise condition:
+
+\begin{multline*}
+\frac{\partial U}{\partial t} 
++ \frac{1}{2} v S^2 \frac{\partial^2 U}{\partial S^2} 
++ \rho \xi S v \frac{\partial^2 U}{\partial S \partial v} 
++ \frac{1}{2} \xi^2 v \frac{\partial^2 U}{\partial v^2} \\
++ (r - q) S \frac{\partial U}{\partial S} 
++ \kappa_{\mathbb{Q}}(\theta_{\mathbb{Q}} - v) \frac{\partial U}{\partial v} 
+- r U \leq 0,
+\end{multline*}
+and such that $U \geq (K - S)^+ $. In our implementation, a $50 \times 25$ grid in the stock and volatility dimensions provides a reasonable trade-off between computational cost and pricing accuracy, which allows us to simulate a high number of option prices required for the training and evaluating of the DRL agent %(see~\cite{tsoskounoglou2025msc} for more details). 
+
+To make the large number of valuations feasible, we precompute the prices and Greeks of the American puts once on a grid of time to maturity, moneyness and volatility, with the same pricing engine, and interpolate in this table during simulation (bicubic splines in log-moneyness and volatility for each maturity day). Vega is computed as the change of the price for a parallel shift of $\sqrt{v_0}$ and $\sqrt{\theta}$, with a central difference of 0.5 volatility points. In the first version of this paper we used a much smaller one-sided bump; on the coarse PDE grid this produced wrong vega values (up to 15 times too large, sometimes with the wrong sign) in about 0.14\% of the option states, mainly 5--9 days before expiry and about 10\% away from the money. The larger central bump removes this artefact. All results in this paper use the table. We checked the table against direct PDE solves at 4,000 random points that are not grid nodes: the 99th percentile of the absolute error is $4.9\times10^{-4}$ for the price, $1.8\times10^{-4}$ for Delta, $3.1\times10^{-3}$ for Gamma and $6.8\times10^{-4}$ for Vega (the largest values in the sample are 8.73, 1, 4.01 and 0.038). On the same paths, the episode PnL of the Delta-Gamma hedge computed with the table and with direct solves differs by at most 0.13, while the standard deviation of the PnL is about 15.
+
+
+\subsection{DRL Framework for Hedging}
+
+The hedging task is formulated as a \emph{Markov Decision Process} and is solved through a distributional deep-reinforcement learning algorithm. In particular, we define the state $s_t$, action $a_t$, and reward $R(s_t, a_t)$ at time $t$, which we use to manage risk exposure under market frictions, i.e. the exposure to the two Greeks Gamma and Vega under transaction costs. Delta hedging is assumed to be frictionless and $\Delta$ is absent from the state space $s_t$. In practice, the net delta of a call–put combination is typically small, as the call’s positive delta largely offsets the put’s negative delta.
+\paragraph{State Space.} 
+The state at time $t$ is defined by the vector,
+\begin{align*}
+    s_t = \{ S_t,\ \Gamma^{\text{Tot}},\ \mathcal{V}^{\text{Tot}}_t,\ \Gamma^{\text{Hedg}}_t,\ \mathcal{V}^{\text{Hedg}}_t \},
+\end{align*}
+where:
+\begin{itemize}[noitemsep, left=10pt]
+    \item $S_t$ is the current price of the underlying asset,
+    \item $\Gamma^{\text{Tot}}_{t}$ and $\mathcal{V}^{\text{Tot}}_{t}$ denote the total aggregated Gamma and Vega exposure of the portfolio at time $t$, respectively. The total portfolio consists of the Delta portfolio, the liability portfolio, and the hedging portfolio,
+    \item $\Gamma^{\text{Hedg}}_{t}$ and $\mathcal{V}^{\text{Hedg}}_{t}$ represent the Gamma and Vega of the available hedging option, which has 30 days to maturity and strike $K = S_t$ at time $t$.
+\end{itemize}
+
+Note that the instantaneous variance process $v_t$ does not appear explicitly in the state representation, but enters implicitly through the Gamma and Vega sensitivities.
+
+\paragraph{Action Space.}
+We model a continuous action space $\mathcal{A}:= [X_{\min}, X_{\max}]$. The action $a_t \in \mathcal A$ denotes the number of option shares to purchase at time $t$ for hedging purposes. These options are written on the same underlying asset as the rest of the portfolio, but can have different maturity from it. By dynamically adjusting the hedge position, the agent aims to reduce the portfolio's Gamma and Vega exposures, achieving either partial or full hedging. The bounds $X_{\min}$ and $X_{\max}$ correspond to hedging 0\% and 100\% of the Gamma or Vega risk. Specifically, $X_{\min}$ is set based on the lower of the Gamma or Vega exposure, while $X_{\max}$ reflects the higher of the two.
+
+
+\paragraph{Reward Function.} 
+The per-step reward is defined as:
+\begin{align}
+R(s_t, a_t) = \text{PnL}_{t \to t+\Delta t}^{\text{Tot}} - \text{TC}_t,
+\end{align}
+where $\text{PnL}_{t \to t+\Delta t}^{\text{Tot}}$ denotes the profit and loss of the total portfolio over the interval $[t, t+\Delta t]$, and $\text{TC}_t$ represents the transaction costs incurred at time $t$ (a proportional cost on the option premium, see Section~\ref{sec:setup}). The reward thus explicitly captures both portfolio profit/loss and trading costs. The DRL agent learns to optimize the cumulative reward over time, with a focus not only on expected return, but also on tail-risk management. To this end, we employ a distributional reinforcement learning approach based on quantile regression~\cite{DH_1, DH_01}, enabling direct optimization of tail-risk objectives such as VaR and CVaR and Mean-Std.
+
+\paragraph{Policy and Discount Factor.}
+The hedging policy $\pi(a\,|\,s)$ is a conditional distribution that assigns to every observed market state $s_t\in\mathcal S$ a feasible hedge adjustment $a_t\in\mathcal A$.  Given such policy, the agent generates a path which contains a set of states and decisions $\{(s_t,a_t)\}_{t=0}^{T-1}$ and stores a reward stream $R(s_t,a_t)$ defined previously.  For a risk measure $\rho$ (defined below) applied to the hedging loss, the optimisation problem becomes
+\begin{equation*}
+\pi^{*}
+= \arg\min_{\pi}\;
+\rho\Bigl[\,
+-\textstyle\sum_{t=0}^{T-1}\gamma^{\,t}R(s_t,a_t)
+\,\Bigr],
+\qquad a_t\sim\pi(\cdot\mid s_{t}).
+\end{equation*}
+For example, under a VaR$_{95\%}$ criterion $\rho$ is the 95\% quantile of the loss, which is the same as maximising the 5\% quantile of the cumulative reward.
+The discount factor $\gamma\in(0,1]$ controls how strongly rewards realised later in the hedge horizon influence the risk measure; we set $\gamma=1$, treating profit-and-loss at every step up to the $T\!=\!30$-day maturity with equal importance.
+
+\paragraph{Objective Functions}
+We evaluate risk using three commonly applied tail-sensitive metrics, each serving as a potential training and evaluation objective for the DRL agent. Let $\text{PnL}$ denote the cumulative profit and loss of the total portfolio at the end of the hedging horizon, after transaction costs, and let $L=-\text{PnL}$ be the corresponding loss. \emph{Sign convention:} in all tables we report the risk measures on the loss side, as positive numbers, so a lower value is better. The objective functions are as follows:
+\begin{align*}
+    \text{Mean-Std} &= -\mathbb{E}[\text{PnL}] + 1.645 \cdot \text{Std}[\text{PnL}] \\
+    \text{VaR}_{95\%} &= F^{-1}_{L}(0.95) = -F^{-1}_{\text{PnL}}(0.05) \\
+    \text{CVaR}_{95\%} &= \mathbb{E}[\,L \mid L \geq \text{VaR}_{95\%}\,]
+\end{align*}
+where $F^{-1}_{X}(\alpha)$ is the $\alpha$-quantile of $X$. The agent minimises the chosen measure. Mean-Std penalizes variability around the expected PnL symmetrically by adding a multiple of the standard deviation. For a normal distribution, $\mathbb{E}[\text{PnL}] - 1.645\cdot\text{Std}[\text{PnL}]$ is the 5\% quantile of the PnL, so Mean-Std is equal to VaR$_{95\%}$; in our results the two values differ by less than 3\% (Section~\ref{sec:heston_results}). VaR$_{95\%}$ is the 95\% quantile of the loss distribution (the 5\% quantile of the PnL distribution), identifying extreme losses with a fixed quantile cutoff. CVaR$_{95\%}$ is the expected loss in the worst 5\% of the outcomes, thus providing a deeper assessment of tail risk. The figures show the PnL itself (losses are negative numbers), so a VaR$_{95\%}$ of 35.1 in a table corresponds to a 5\% PnL quantile of $-35.1$ in a figure.
+
+\subsection{Distributional Actor–Critic Algorithm}
+
+We employ the D4PG-QR algorithm~\cite{DRL_3, DH_1}, which integrates continuous control with distributional reinforcement learning. By modelling the full return distribution via quantile regression, this approach enables direct optimisation of VaR and CVaR. For this version of the paper we re-implemented the agent in PyTorch with the learner settings of the original implementation; the settings are listed in Table~\ref{tab:hyper}.
+
+\begin{itemize}[noitemsep, left=10pt]
+    \item \textbf{Actor network}: outputs the continuous hedge adjustment $a_t$ given the current state $s_t$.
+    \item \textbf{Critic network}: estimates the distribution of future returns using quantile regression, enabling explicit optimization of risk-sensitive objectives.
+\end{itemize}
+
+\paragraph{Training Procedure.} 
+To create the simulated hedging environment, first, the underlying asset paths are generated (using either the Quadratic-Exponential scheme for the Heston model or the closed-form solution for the BS). Second, for each time step, PDE-based option prices and Greeks are computed for the option portfolios. Third, the DRL agent learns optimal hedging through the following iterative procedure: 
+
+\begin{enumerate}[noitemsep, left=10pt]
+    \item Transitions $(s_t, a_t, r_t)$ are collected and stored in a replay buffer.
+    \item The critic network is updated off-policy by minimizing the distributional Bellman error via quantile regression.
+    \item The actor network is updated using the policy gradient, guided by feedback from the distributional critic.
+\end{enumerate}
+
+Before the state enters the networks, each state variable is scaled with the median and the interquartile range (IQR) of the training paths (robust scaling). The same scaling is stored with the trained policy and used unchanged on the validation and test paths.
+
+\paragraph{Evaluation and Robustness Testing.} 
+For each experiment we train several agents that differ only in the random seed (5 seeds under Black--Scholes and 10 seeds under Heston). Each agent is trained for 40,000 episodes, and every 1,000 episodes its policy is evaluated on a fixed validation set of 8,192 episodes (random seed 2025). For each agent we keep the checkpoint with the lowest validation VaR$_{95\%}$. We report two agents: the \emph{selected} agent, which has the lowest validation VaR$_{95\%}$ over all seeds, and the \emph{median} agent, which has the median validation VaR$_{95\%}$. Both are evaluated on an independent test set of 8,192 episodes (random seed 654). The tuned rules of Section~\ref{sec:baselines} are tuned on the same validation set and evaluated on the same test set. Validation and test paths are never used for training. Standard errors are computed with a bootstrap over the test episodes (1,000 resamples); for the difference between two strategies we use a paired bootstrap on the same test paths. These standard errors do not include the uncertainty from selection and tuning. The agents are trained with the VaR$_{95\%}$ objective only; we also report the CVaR$_{95\%}$ and the Mean-Std of the same agents. Specifically, we test:
+\begin{itemize}[noitemsep, left=10pt]
+    \item Hedging performance relative to Delta, Delta-Gamma and Delta-Vega hedging and to tuned cost-aware rules, at three cost levels.
+    \item The effect of proportional costs on stock trades, charged after training.
+    \item Out-of-distribution generalisation: performance on test paths simulated with Heston parameters that differ from the training ones: initial volatility $\sqrt{v_0}$, long-term variance $\theta$, mean reversion speed $\kappa$, vol-of-vol $\xi$ and correlation $\rho$.
+\end{itemize}
+
+\begin{table}[width=\linewidth,cols=2,pos=h]
+  \caption{Settings of the D4PG-QR agent}
+  \label{tab:hyper}
+  \begin{tabular*}{\tblwidth}{@{\extracolsep{\fill}} l l @{}}
+    \toprule
+    Setting & Value \\
+    \midrule
+    Actor network & 3 hidden layers (256, 256, 256) \\
+    Critic network & 3 hidden layers (512, 512, 256) \\
+    Quantiles & 99 \\
+    Critic loss & quantile Huber loss ($\kappa_{\mathrm{H}}=1$) \\
+    Optimiser & Adam, learning rate $10^{-4}$ \\
+    Gradient clipping & global norm 40 \\
+    Batch size & 256 \\
+    Return & 5-step, discount $\gamma=1$ \\
+    Target networks & copied every 100 learner steps \\
+    Replay & uniform, start after 1,000 steps \\
+    Samples per insert & 32 \\
+    Exploration & Gaussian noise, $\sigma=0.3$ \\
+    State scaling & median and IQR (training paths) \\
+    Training & 40,000 episodes \\
+    Validation & every 1,000 episodes \\
+    \bottomrule
+  \end{tabular*}
+\end{table}
+
+\section{Experiments and Results}
+\label{sec:experiments}
+
+All experiments of this version run on one laptop (Apple M1, 8 cores). Six agents are trained in parallel; one run of 40,000 episodes takes about 2.8 hours, and the 45 runs of this paper (15 under Black--Scholes, 30 under Heston) take about 24 hours in total. This is possible because the American option prices and Greeks are read from the precomputed table of Section~\ref{sec:american_pricing}, and not computed with a new PDE solve at every step. The first version of this paper used direct PDE solves and about 150,000 CPU hours.
+
+
+\subsection{Experiment Setup}
+\label{sec:setup}
+
+The experiments investigate hedging strategies for American put options under stochastic conditions. Specifically, we consider:
+\begin{itemize}[noitemsep, leftmargin=1.5em, labelsep=0.5em]
+    \item An initial American put option with a time to maturity (TTM) of 30 days.
+    \item Subsequent American put option arrivals, each with a 60-day TTM and an at-the-money strike price ($K = S_t$), following a Poisson process with intensity $\lambda = 1$ and equal probability (50\%) of being either short or long positions.
+    \item Proportional transaction costs on option trades at three levels, $c \in \{0.5\%, 1\%, 2\%\}$. When the agent buys or sells $n_t$ contracts of the new 30-day hedging option at time $t$, it pays
+    \begin{align*}
+    \text{TC}_t = c \cdot |n_t| \cdot N_c \cdot C_t ,
+    \end{align*}
+    where $C_t$ is the model price of one unit of the hedging option (computed with the pricing method of Section~\ref{sec:american_pricing}, i.e.\ a mid price) and $N_c=100$ is the contract size. The full rate $c$ is charged on each trade, so $c$ is a proportional cost rate on the option premium, and not a quoted bid-ask spread (it corresponds to a half-spread of $c$, or a full bid-ask spread of $2c$, around the model price). Each hedging option is held until it expires, so there is no second cost to close the position. Delta hedging with the underlying is assumed to be frictionless.
+\end{itemize}
+
+\noindent We adopt the Heston stochastic volatility model with the following set of reasonable (potentially market calibrated) parameters, using a positive risk-free rate and equity drift:
+\begin{center}
+\begin{tabular}{@{}llll@{}}
+$r = 2\%$ & $\mu=3\%$ & $ q=0\%$ & $\kappa = 1.0$ \\
+$\theta = 0.30^2$ & $\xi = 0.3$ & $\rho = -0.7$ & $v_0 = 0.30^2$ \\
+\end{tabular}
+\end{center}
+
+The mean rate of return for $S_t$ under $\mathbb{P}$ is $r+\mu-q=5\%$, while under $\mathbb{Q}$ it is $r-q$. In all experiments of this paper we assume that there is no market price of volatility risk ($\lambda_v = 0$). Then the variance process has the same dynamics under $\mathbb{P}$ and $\mathbb{Q}$, i.e.\ $\kappa_{\mathbb{P}}=\kappa_{\mathbb{Q}}=\kappa$ and $\theta_{\mathbb{P}}=\theta_{\mathbb{Q}}=\theta$, and the only difference between the simulation measure $\mathbb{P}$ and the pricing measure $\mathbb{Q}$ is the drift of the stock. For this reason, in the rest of the paper we write simply $\kappa$ and $\theta$.
+
+With a positive interest rate, the American puts have an early-exercise premium, and their prices and Greeks differ from those of European puts. Section~\ref{sec:experiments-with-zero-drift} measures how large this effect is in our setting. Note that the environment never exercises an option: each option is held to maturity and marked to its model (American) price every day, so the American feature enters the hedging problem only through the prices and Greeks. For the GBM benchmark we set the volatility to $\sigma=0.30$ and take $r=\mu=q=0$, matching the specification in Cao~\cite{DH_1}. This serves as a validation of our DRL implementation.
+
+\subsection{Baseline Strategies}
+\label{sec:baselines}
+
+Each day the hedger can only buy or sell the new 30-day at-the-money option. Let $n^{\Gamma}_t$ be the number of contracts that makes the Gamma of the portfolio zero, and $n^{\mathcal{V}}_t$ the number that makes its Vega zero. Delta is hedged with the stock at every step for all strategies. We use the following baselines:
+\begin{itemize}[noitemsep, left=10pt]
+    \item \textbf{Delta:} no option trades.
+    \item \textbf{Delta-Gamma (DG):} trade $n^{\Gamma}_t$ (full Gamma neutrality).
+    \item \textbf{Delta-Vega (DV):} trade $n^{\mathcal{V}}_t$ (full Vega neutrality). With one new option per day, Gamma and Vega cannot be made zero at the same time.
+    \item \textbf{Rule (a), fraction:} trade $a\,n^{\Gamma}_t + b\,n^{\mathcal{V}}_t$, clipped to the action range of the DRL agent.
+    \item \textbf{Rule (b), fraction and no-trade band:} as rule (a), but do not trade if $|a\,n^{\Gamma}_t + b\,n^{\mathcal{V}}_t| < w$ contracts.
+\end{itemize}
+The parameters are chosen on the validation set by a grid search, $a, b \in \{0, 0.1, \dots, 1\}$ and $w \in \{0, 0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1, 1.5\}$, separately for each model and cost level, with the VaR$_{95\%}$ of the loss as criterion. Under Black--Scholes there is no Vega risk, so only $a$ matters. Rule (b) is the empirical version of the no-transaction band, which is the optimal structure under proportional costs~\cite{whalley1997asymptotic, imaki2021ntbn}. The rules are cheap to tune here because there are only two risk factors and one hedging option; this would be harder with more instruments.
+
+\subsection{Black-Scholes Results}
+In this constant-volatility setting there is no Vega risk, and Gamma is the only second-order risk. Table~\ref{table:gbmtable} compares the DRL agent with Delta hedging, full Delta-Gamma hedging and the tuned rules, on the test paths. All risk measures are positive losses (lower is better).
+
+\begin{table*}[tb]
+\caption{Results under the Black--Scholes model (constant volatility), test set}
+\label{table:gbmtable}
+\begin{adjustbox}{width=1\textwidth}
+\input{\gendir/tables/gbm}
+\end{adjustbox}
+\justifying \small
+Test set: 8,192 episodes (seed 654). RL: D4PG-QR agents trained with the VaR$_{95\%}$ objective, 5 seeds; \emph{selected} = lowest validation VaR$_{95\%}$, \emph{median} = median validation VaR$_{95\%}$. Rules tuned on the validation set (8,192 episodes, seed 2025) for VaR$_{95\%}$: rule (a) $a=0.9, 0.6, 0.3$; rule (b) $(a,w)=(0.9, 0.2), (0.7, 0.5), (0.5, 0.5)$ for the three cost levels. Bootstrap standard errors in brackets. Risk measures are positive losses (lower is better); $\mathbb{E}[\text{TC}]$ is the expected option transaction cost per episode. Delta hedging is frictionless, so its values do not depend on the cost level. The average share of Gamma hedged by the selected agent is 0.89, 0.65 and 0.35.
+\end{table*}
+
+The DRL agent learns to hedge less Gamma when costs are higher: the selected agent hedges on average 89\%, 65\% and 35\% of the Gamma exposure at 0.5\%, 1\% and 2\% cost. Compared to full Delta-Gamma hedging, it reduces VaR$_{95\%}$ by 0.24, 1.39 and 5.87, that is 4.6\%, 14.4\% and 31.4\% (paired standard errors 0.03, 0.07 and 0.12). Compared to the tuned rule (b), the agent is worse by 0.03, 0.13 and 0.36 (paired standard errors 0.03, 0.06 and 0.09), so the two are almost equal. The agent is slightly better than the one-parameter rule (a), by 0.03, 0.22 and 0.54. The selected and the median agent are very close, so the result does not depend on the choice of seed. Our results under GBM are in line with those of Cao~\cite{DH_1} for European options: the DRL agent learns a partial Gamma hedge whose gain over full Delta-Gamma hedging grows with the cost level.
+
+\subsection{Heston Results}
+\label{sec:heston_results}
+
+Under stochastic volatility the agent must manage both Gamma and Vega exposure with one hedging option. Table~\ref{table:hestontableWdrift} shows the results for the main scenario ($r=2\%$, $\mu=3\%$, $\lambda_v=0$).
+
+\begin{table*}[tb]
+\caption{Hedging results under stochastic volatility (Heston) with $r=2\%$ and mean rate of return $5\%$, test set}
+\begin{adjustbox}{width=1\textwidth}
+\input{\gendir/tables/heston}
+\end{adjustbox}
+\justifying \small
+Test set: 8,192 episodes (seed 654) under the physical measure $\mathbb{P}$ (Heston, $r=2\%$, mean rate of return $5\%$, $\lambda_v=0$). RL: D4PG-QR agents trained with the VaR$_{95\%}$ objective, 10 seeds; \emph{selected} = lowest validation VaR$_{95\%}$, \emph{median} = median validation VaR$_{95\%}$. Rules tuned on the validation set (8,192 episodes, seed 2025) for VaR$_{95\%}$; rule (b) uses $(a,b,w)=(0.3,0.3,0.3)$, $(0.3,0.3,0.5)$ and $(0.2,0.3,1.0)$ for the three cost levels. Bootstrap standard errors in brackets. Risk measures are positive losses (lower is better); $\mathbb{E}[\text{TC}]$ is the expected option transaction cost per episode. The average shares of Gamma and Vega hedged by the selected agent are 0.24/0.26, 0.18/0.24 and 0.12/0.16.
+\vspace{-5pt}
+\label{table:hestontableWdrift}
+\end{table*}
+
+\paragraph*{Comparison to full Greek neutrality.}
+Delta-Gamma and Delta-Vega hedging both reduce risk compared to pure Delta hedging. Delta-Vega is the weaker of the two, because neutralising all Vega with a short-dated option needs many contracts and is expensive. The DRL agent is better than both at every cost level. Compared to Delta-Gamma hedging, the selected agent reduces VaR$_{95\%}$ by 4.72, 4.58 and 6.24, that is 15.2\%, 13.3\% and 15.1\% (paired standard errors 0.53, 0.56 and 0.55). Compared to Delta-Vega hedging, the reduction is 15.14, 17.70 and 25.75 (37\%, 37\% and 42\%). The agent hedges only a small part of the risk: on average 12--24\% of the Gamma and 16--26\% of the Vega exposure, less when costs are higher. Its expected transaction cost grows less than proportionally with the cost rate (4.09, 6.88 and 9.63), while the cost of Delta-Gamma hedging doubles with every step (3.27, 6.53, 13.07).
+
+\paragraph*{Comparison to tuned cost-aware rules.}
+The tuned rules are better than the DRL agent at every cost level. Rule (b) has a lower VaR$_{95\%}$ by 1.38, 2.52 and 2.57 (paired standard errors 0.36, 0.37 and 0.51), and also a lower CVaR$_{95\%}$ and a lower expected cost. The median agent is close to the selected agent at 0.5\% and 1\% cost and about 1.2 worse at 2\% cost, so the conclusion does not depend on the selected seed. The tuned rules trade only 20--30\% of the full-hedge quantities ($a$ and $b$ between 0.2 and 0.3), so they are also partial hedges, like the agent. So most of the gain of DRL over full Greek neutrality comes from partial hedging, and a simple rule with two or three parameters, tuned on the same validation paths, gets this gain at least as well. The agent finds a similar partial hedge without any hand design, but it trades more than the rule (higher expected cost) and does not reach the same tail risk. Under Black--Scholes, where the problem has only one risk factor, the gap between the agent and the rule is much smaller.
+
+\paragraph*{Other risk measures.}
+The agents are trained only with the VaR$_{95\%}$ objective. The Mean-Std value of the selected agents is 27.00, 30.06 and 35.79, within 3\% of their VaR$_{95\%}$. The CVaR$_{95\%}$ in Table~\ref{table:hestontableWdrift} gives the same conclusions as the VaR$_{95\%}$: the agent is better than full Greek hedging and worse than the tuned rules.
+
+\paragraph*{Costs on stock trades.}
+Delta hedging with the stock is free in the main experiments. To test this assumption, we charge a proportional cost of 1, 2 and 5 basis points (bp) on every stock trade after training, on the same test paths, without retraining the agent. The rule (b) parameters are tuned again on the validation set for each bp level. Table~\ref{tab:deltacost} shows the results. All strategies get worse by a similar amount. The DRL agent keeps a gain of 3.5--6.2 in VaR$_{95\%}$ over Delta-Gamma hedging, and the tuned rule stays better than the agent by 1.4 to 2.5. So the conclusions do not depend on free Delta hedging.
+
+\begin{table}[width=\linewidth,cols=5,pos=h]
+\caption{VaR$_{95\%}$ with proportional costs on stock trades (Heston, test set)}
+\label{tab:deltacost}
+\input{\gendir/tables/deltacost}
+\justifying \small
+Cost on stock trades $=$ bp $\times\,|\text{change in stock position}| \times S_t$, charged after training on the test episodes (8,192, seed 654). The RL agent is not retrained; rule (b) is tuned again on the validation set for each bp level. Positive losses (lower is better). Paired standard errors of the differences are 0.5--0.6 (RL vs Delta-Gamma) and 0.35--0.5 (RL vs rule (b)).
+\end{table}
+
+\begin{figure*}[tb]
+    \centering
+    \includegraphics[width=1\linewidth]{\gendir/figures/hedging_dynamics.pdf}
+    \caption{Hedging dynamics of the selected DRL agent under Heston ($r=2\%$, 2\% transaction cost, VaR$_{95\%}$ objective) on the 8,192 test episodes. The agent hedges a book that starts with a 30-day American put and receives 60-day options at random times, using a new 30-day hedging option each day. Panels (1,1) and (2,1): Gamma and Vega of the total portfolio before and after the daily hedge trade. Panels (1,2) and (2,2): Gamma and Vega of the hedging options and of the liabilities (sign flipped). Panel (3,1): mean daily PnL of the stock, the liabilities and the hedging options. Panel (3,2): cumulative option transaction costs of the agent, of Delta-Gamma hedging and of the tuned rule (b). Panel (4,1): cumulative PnL of the agent with its 5\% quantile and the mean beyond it. Panel (4,2): distribution of the episode PnL for the three strategies; the dashed lines are the 5\% quantiles. Lines are means and shaded areas are 2.5\%--97.5\% quantile bands over the test episodes. The figure shows PnL values, so losses, VaR and CVaR appear as negative numbers; in the tables the same quantities are reported as positive losses.} \label{fig:cvar_viz}
+    \vspace{-10pt}
+\end{figure*}
+
+\subsubsection{Hedging Dynamics Visualization}
+\label{sec:drl_hedging_vis}
+
+Figure~\ref{fig:cvar_viz} shows how the selected agent hedges under Heston with a 2\% cost, on the test episodes. Panels (1,1) and (2,1) show that the daily trade removes only a small part of the Gamma and Vega exposure: the bands before and after the trade are almost the same, in line with the low hedge ratios in Table~\ref{table:hestontableWdrift}. Panels (1,2) and (2,2) show the Greeks of the two parts of the book.
+
+Note that the liability portfolio receives randomly arriving options with 60-day time-to-maturity (TTM), whereas the hedging instruments have a fixed 30-day TTM. As a result, the Gamma of the hedging options tends to exceed that of the liabilities, while the opposite holds for Vega. This mismatch is the reason why Gamma and Vega cannot be neutralised together with one option per day, and why a partial hedge of both is a good choice.
+
+Panel (3,1) shows that the daily PnL of the liabilities and of the hedging options fluctuate strongly and largely offset each other. Panel (3,2) shows that the agent's costs grow almost linearly over the horizon; they are lower than the costs of full Delta-Gamma hedging, but higher than those of the tuned rule. Panel (4,1) shows how the tail of the cumulative PnL builds up over the 30 days. Panel (4,2) compares the episode PnL of the three strategies: the agent and the rule shift the left tail to the right compared to Delta-Gamma hedging, and the rule does this a little more.
+
+\subsubsection{Training Stability and Agent Selection}
+\label{sec:appendix_trainingdynamics}
+
+\begin{figure*}[tb]
+    \centering \includegraphics[width=.95\linewidth]{\gendir/figures/heston_seeds_validation.pdf}
+    \caption{Validation VaR$_{95\%}$ (positive loss, lower is better) during training for the 10 DRL agents trained under Heston ($r=2\%$) with a 2\% transaction cost and the VaR$_{95\%}$ objective. Each line is one training seed, evaluated every 1,000 episodes on the same 8,192 validation episodes (seed 2025). The red line is the selected agent (seed 6) and the dot its selected checkpoint. The horizontal lines show the test VaR$_{95\%}$ of Delta-Gamma hedging and of the tuned rule (b).}
+    \vspace{-15pt}
+\label{fig:cvar2}\end{figure*}
+
+Figure~\ref{fig:cvar2} shows the validation VaR$_{95\%}$ during training for the 10 agents under Heston with a 2\% cost. The agents have the same architecture, settings and type of training data, and differ only in the random seed. All 10 agents converge, and all of them end below the Delta-Gamma level, but none of them reaches the level of the tuned rule. On the test set, the VaR$_{95\%}$ of the 10 agents lies between 34.93 and 37.26 at 2\% cost (between 25.78 and 27.26 at 0.5\% and between 28.84 and 31.27 at 1\%). Under Black--Scholes the spread is much smaller (5.06--5.12, 8.26--8.45 and 12.82--13.01).
+
+Because we select the best agent and checkpoint on the validation set, its validation score is optimistic. On the test set the selected agent is worse than on the validation set by 0.65, 0.92 and 0.71 under Heston (25.60 to 26.25, 29.03 to 29.95, 34.42 to 35.13), and by 0.05--0.19 under Black--Scholes. In the first version of this paper, the best agent was selected on the same paths that were used to report its results, which is an in-sample selection; these numbers show that this selection effect is about 2--3\% of the VaR$_{95\%}$ under Heston. With a separate test set, the reported numbers are free of this effect.
+
+The comparison with the results of Cao~\cite{DH_1} for European calls under SABR (zero drift) is only indirect, because the model, the option type and the numerical method are different. Their VaR$_{95\%}$ gains of DRL over Delta-Gamma hedging are $-0.42\%$, $12.16\%$ and $22.23\%$ at the three cost levels; ours under Heston are 15.2\%, 13.3\% and 15.1\%. Cao et al.\ do not compare with partial hedging rules, so we cannot say how much of their gain a tuned rule would also reach.
+
+
+\section{Early Exercise in the Main Scenario}\label{sec:experiments-with-zero-drift}
+
+With $r=q=0$ early exercise of a put is never optimal, and an American put has the same value as a European put. With $r=2\%$ early exercise can be optimal, but only deep in the money and close to maturity. To see how much this matters in our setting, we count on the test paths of the main scenario how often a held hedging put is in the exercise region, that is, in the money with a model price within $5\times10^{-4}$ of its intrinsic value. We also compute the early-exercise premium (American minus European price) for typical options. Table~\ref{tab:early_ex} shows the results.
+
+\begin{table}[width=\linewidth,cols=3,pos=h]
+\caption{How often early exercise matters (hedging puts, Heston test paths)}
+\label{tab:early_ex}
+\input{\gendir/tables/early_exercise}
+\justifying \small
+4,046,848 option-days on 8,192 test paths. The largest share is at 1 day to expiry for $r=0$ and at 3--4 days for $r=2\%$. Premium = American minus European price of a put with $v=0.09$ (finite-difference vs analytic). At $r=0$ the small numbers are numerical noise; the premium is zero in theory.
+\end{table}
+
+With $r=2\%$, about 2\% of the option-days are in the exercise region. These are mostly puts in the last two weeks before expiry that are deep in the money, where Gamma and Vega are close to zero, so they carry almost no second-order risk. The early-exercise premium is at most about 1.5\% of the option price. With $r=0$ the share is almost zero, as expected. Note that the environment never exercises an option: it holds each option to maturity and marks it to its American model price, which equals the intrinsic value in the exercise region. So the American feature enters only through the prices and Greeks.
+
+The baselines confirm that early exercise plays a small role. On the same test paths, with rules tuned in the same way, but with $r=\mu=0$, the VaR$_{95\%}$ of full Delta-Gamma hedging is 31.05, 34.72 and 42.12, and that of the tuned rule (b) is 25.03, 27.67 and 32.69, very close to the values with $r=2\%$ in Table~\ref{table:hestontableWdrift}. The American feature makes the test case realistic, but it does not change the comparison between DRL and simple rules in our setting.
+
+
+\section{Out-of-Distribution Generalisation to Heston Parameters}
+\label{sec:robustness}
+
+In practice, market conditions change and Heston parameters are rarely calibrated exactly. This section tests how the DRL policy performs when the market parameters differ from the parameters used in training. We take the selected agent of the main scenario (2\% cost, VaR$_{95\%}$ objective) and do not retrain it. In each test we change one Heston parameter, simulate new test paths (8,192 episodes, seed 654, the same in every row), and compute the option prices and Greeks again with the new parameter, so all hedgers use the correct Greeks of the new market. This means that the test measures out-of-distribution generalisation of the policy, and not the effect of a misspecified pricing model. The baselines are evaluated on the same paths; the rules keep the parameters tuned at the base parameters, so they are also not re-tuned. Table~\ref{tbl:robustness} shows the results.
+
+\begin{table}[width=\linewidth,cols=5,pos=h]
+\caption{Out-of-distribution test with changed Heston parameters (2\% cost)}
+\label{tbl:robustness}
+\small
+\input{\gendir/tables/robustness}
+
+\justifying \small
+VaR$_{95\%}$ of the loss (positive, lower is better), bootstrap standard errors in brackets. One DRL policy (selected agent of Table~\ref{table:hestontableWdrift}, 2\% cost), trained with the base parameters $\{\sqrt{v_0}=0.3\ (v_0=0.09),\ \xi=0.3,\ \kappa=1.0,\ \rho=-0.7,\ \theta=0.09\}$, $r=2\%$, $\mu=3\%$, $\lambda_v=0$. Each row changes one parameter of the test market. In every row: 8,192 test episodes with seed 654, new paths, and prices and Greeks computed with the changed parameter. Rule (b) keeps its base tuning $(a,b,w)=(0.2, 0.3, 1.0)$. Bold: best strategy in the row (the difference RL $-$ rule (b) at $\xi=0.15$ is $-0.38$ with paired standard error 0.34). Standard errors of Delta-Gamma and rule (b) are 0.3--0.7.
+\vspace{-5pt}
+\end{table}
+
+For the parameters $\theta$, $\rho$ and $\kappa$ the changes are small for all strategies: the VaR$_{95\%}$ of the agent moves by at most 1.3, and its gain over Delta-Gamma hedging stays between 6.0 and 6.3. Changes in $\sqrt{v_0}$ and $\xi$ have a large effect on the risk of all strategies. A part of this effect is expected for any hedger, because a market with higher volatility or vol-of-vol is more risky; this is why the baselines are needed to judge the policy.
+
+For a lower initial volatility ($\sqrt{v_0}=0.15$) and for both values of the vol-of-vol, the agent keeps its advantage over Delta-Gamma hedging (gains of 7.41, 2.82 and 9.23). For a low vol-of-vol ($\xi=0.15$) the agent is even slightly better than the rule, but the difference is within the standard error. For a much higher initial volatility ($\sqrt{v_0}=0.45$), however, the agent fails: its VaR$_{95\%}$ is 8.07 higher than that of Delta-Gamma hedging and 16.23 higher than that of the rule, and its expected cost is 2.6 times the base value. In this market the Gamma and Vega exposures are much larger than in training, and the agent trades too much. The rule, which is a simple linear function of the full-hedge quantities, generalises better.
+
+So the learned policy is stable for moderate changes of the parameters, but it should not be used far outside the training range of the initial volatility. Training with randomised Heston parameters, or retraining when the volatility level changes, could reduce this problem (Section~\ref{sec:FutureDirections}).
+
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+We studied a deep reinforcement learning approach for managing the Gamma and Vega exposure of a book of American put options under stochastic volatility and transaction costs on options. The hedging environment uses the Quadratic-Exponential scheme to simulate Heston paths and the Modified Craig--Sneyd finite difference scheme, through a precomputed table, to price the American options; the agent is a distributional actor-critic (D4PG-QR) that minimises the VaR$_{95\%}$ of the hedging loss.
+
+The DRL strategy reduces tail risk compared to full Gamma or Vega hedging: under Heston its VaR$_{95\%}$ is 13--15\% lower than that of Delta-Gamma hedging and 37--42\% lower than that of Delta-Vega hedging, on test paths and at all three cost levels. However, a tuned rule that hedges a fixed fraction of the Gamma and Vega risk with a no-trade band reaches a lower level, by 1.4 to 2.6 in VaR$_{95\%}$ (6--9\%); under Black--Scholes the agent and the rule are almost equal. Most of the gain of DRL over full Greek neutrality therefore comes from partial hedging. DRL finds a good partial hedge without a hand-tuned grid, which can be useful when the number of instruments or risk factors is larger and a grid search is not possible. For the setting of this paper, however, the simple rule is a strong and cheaper alternative, and we recommend tuned cost-aware rules as the standard benchmark for DRL hedging studies. These conclusions do not change when we add costs of up to 5 bp on stock trades.
+
+Early exercise plays a small role in our setting: with $r=2\%$ only about 2\% of the option-days of the hedging puts are in the exercise region, and the baselines give almost the same results with $r=0$. The American feature makes the test case realistic, but it is not a reason to use DRL.
+
+We further tested how the learned policy generalises to Heston parameters that differ from the training parameters. For $\theta$, $\rho$ and $\kappa$ the performance is stable and the agent keeps its advantage over Delta-Gamma hedging; for a lower initial volatility and for other values of the vol-of-vol it also keeps this advantage. For a much higher initial volatility the agent trades too much and is worse than both Delta-Gamma hedging and the rule.
+
+Finally, the results of different training seeds differ by up to 2.4 in VaR$_{95\%}$ under Heston, and selecting the best seed on the validation set gives an optimistic validation score (by about 2--3\%). Several training runs and a separate test set are therefore needed for a fair evaluation of DRL hedging strategies.
+
+\section{Future Research Directions}
+\label{sec:FutureDirections}
+
+While our results show the strengths and the limits of DRL for higher-order hedging under stochastic volatility, several extensions remain open for exploration.
+
+First, instead of starting with a single option, future work could start from a given portfolio of options, e.g. calls, puts, European, American, swaps and futures across various strikes and maturities. This would better reflect real-world trading environments and increase policy applicability. In such settings a grid search over simple rules becomes harder, and the advantage of a learned policy may be larger.
+
+Second, expanding the action space to include additional hedging instruments, such as variance swaps or options with different maturities and strikes, could enhance the agent’s ability to control complex sensitivities, including higher-order Greeks.
+
+Third, more realistic modeling of transaction costs; varying by strike, maturity, and market conditions; would increase exactness. Similarly, simulating the arrival of new liabilities using historical trade data would align training environments more closely with institutional settings.
+
+Fourth, incorporating jump-diffusion models would allow the framework to better capture short-term price shocks and improve hedging accuracy for short-dated options. Additionally, modeling parameter uncertainty during training (e.g., randomizing Heston parameters) could improve robustness to market regime changes, in particular to the initial volatility (Section~\ref{sec:robustness}).
+
+Lastly, algorithmic performance could benefit from more tuned DRL architectures. Enhancements might include integrating additional higher-order Greeks into the state space (Charm $\big( \frac{\partial \Delta}{\partial t} \big)$, Veta $\big( \frac{\partial \mathcal{V}}{\partial t} \big)$, Color $\big( \frac{\partial \Gamma}{\partial t} \big)$), or giving the agent the structure of a no-trade band as a prior~\cite{imaki2021ntbn}. Such changes could help the agent to reach the level of the tuned rules.
+
+\subsection*{Code and Data Availability}
+This study relies exclusively on simulated data. The source code and scripts 
+used to generate the results are publicly available under 
+\href{https://github.com/ithakis/DRL-Hedging-AmericanOptions}{github.com/ithakis/DRL-Hedging-AmericanOptions}.
+
+% References
+\bibliographystyle{cas-model2-names}
+\bibliography{Bibliography.bib}
+
+
+% \appendix
+
+
+\end{document}
