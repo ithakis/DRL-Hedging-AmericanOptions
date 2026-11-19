@@ -55,7 +55,8 @@ def rollout(m, decide, vega_obs):
     """Vectorised episode. decide(t, obs, n_g, n_v, lo, hi) -> contracts x of the new hedge option.
 
     Returns dict: pnl before option cost, option-cost base (sum |x price|), delta-trade base
-    (sum |stock position change| S_t), gamma / vega hedge ratios (mean of x/n_G, x/n_V).
+    (sum |stock position change| S_t), gamma / vega hedge ratios = sum(x n_G) / sum(n_G^2) over
+    paths and days (least-squares slope of the trade on the neutral amount; 1 = full DG / DV).
     The action range [lo, hi] is the RL agent's range (vega part only when vega_obs).
     """
     m = {k: np.asarray(v) for k, v in m.items()}
@@ -78,9 +79,10 @@ def rollout(m, decide, vega_obs):
         obs = np.stack([S[:, t], G, g_h] + ([V, v_h] if vega_obs else []), axis=1)
         x = decide(t, obs, n_g, n_v, lo, hi)
         n[:, t] = x
-        ok_g, ok_v = np.abs(n_g) > 1e-8, np.abs(n_v) > 1e-8
-        rg.append(np.where(ok_g, x / np.where(ok_g, n_g, 1.0), np.nan))
-        rv.append(np.where(ok_v, x / np.where(ok_v, n_v, 1.0), np.nan))
+        # hedge ratio as a least-squares slope of x on the neutral amount (robust to tiny n_G / n_V)
+        fg, fv = np.isfinite(n_g), np.isfinite(n_v)
+        rg.append((np.sum(x[fg] * n_g[fg]), np.sum(n_g[fg] ** 2)))
+        rv.append((np.sum(x[fv] * n_v[fv]), np.sum(n_v[fv] ** 2)))
         ob += np.abs(x * m["h_price"][:, t, t])
         act_next = ~m["h_inactive"][:, t + 1, :]
         pos = -(m["l_delta"][:, t] + np.sum(n * m["h_delta"][:, t, :] * act, axis=1))
@@ -89,7 +91,8 @@ def rollout(m, decide, vega_obs):
         pnl += m["l_next"][:, t] - m["l_price"][:, t]
         pnl += np.sum(n * (m["h_price"][:, t + 1, :] - m["h_price"][:, t, :]) * act_next, axis=1)
         pnl += pos * (S[:, t + 1] - S[:, t])
-    return dict(pnl=pnl, ob=ob, db=db, gamma_ratio=float(np.nanmean(rg)), vega_ratio=float(np.nanmean(rv)))
+    ratio = lambda r: float(sum(a for a, _ in r) / max(sum(b for _, b in r), 1e-300))
+    return dict(pnl=pnl, ob=ob, db=db, gamma_ratio=ratio(rg), vega_ratio=ratio(rv))
 
 
 def net(res, spread, bp=0):
