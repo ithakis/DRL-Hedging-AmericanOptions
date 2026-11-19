@@ -4,6 +4,23 @@ This repository accompanies research on risk-sensitive deep reinforcement learni
 
 If you’re reading the paper, this README maps concepts to code and gives step-by-step instructions to reproduce training and evaluation.
 
+
+## Reproduce the revised paper (one command)
+
+Environment: `pip install -r requirements-torch.txt` (Python 3.10, PyTorch pipeline in `train_d4pg.py`).
+
+| Command | What it does | Time (M1 Air) |
+|---|---|---|
+| `make paper` | LaTeX tables + figures from the stored result files and weights, then the PDF | ~2 min |
+| `make all` | re-tunes the rule baselines, evaluates all stored agents on the test paths, writes every CSV/markdown result, then `make paper` | ~30-60 min |
+| `make retrain` | trains all 45 agents from scratch (`logs_torch/retrain`), exports the weights, then `make all` | several days |
+
+Stored inputs: agents in `review/results/retrain/weights/` (which file is used where: `mapping.csv`), validation
+curves in `review/results/retrain/runs/`, Heston price tables in `pricing_tables/`. Simulated markets are cached in
+`markets/` (not in git; built on first use). Generated paper files: `review/results/paper/{tables,figures}`, which
+`main.tex` includes with `\input` / `\includegraphics`. On GitHub, Actions -> "Build paper" runs `make paper`
+(cheap path only; no training or evaluation runs in the cloud).
+
 ## What’s implemented
 
 - Market models and pricing

@@ -31,8 +31,10 @@ import evaluate_policy_numpy as npe  # noqa: E402
 import train_d4pg as T  # noqa: E402
 from review.retrain.settings import BLOCKS, BUMPS, COSTS, run_name, with_bump  # noqa: E402
 
-LOGS = ROOT / "logs_torch" / "retrain"
+LOGS = ROOT / "logs_torch" / "retrain"          # local training output (not in git)
 OUT = ROOT / "review" / "results" / "retrain"
+RUNS = OUT / "runs"                              # results.json / validation.csv of every run (in git)
+WEIGHTS = OUT / "weights"                        # policy_best.npz of every run (in git)
 DELTA_BP = [0, 1, 2, 5]
 A_GRID = np.round(np.arange(0.0, 1.0001, 0.1), 2)
 W_GRID = [0.0, 0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1.0, 1.5]
@@ -208,13 +210,20 @@ def cmd_rules(args):
     json.dump(out, open(OUT / f"baselines_{blk}.json", "w"), indent=2)
 
 
-def runs_of(block, spread):
+def runs_of(block, spread, source="repo"):
+    """All finished runs of one cell, sorted by validation VaR95.
+
+    source="repo": the stored weights in review/results/retrain/{runs,weights} (default, needs no training).
+    source="logs": the local training output in logs_torch/retrain (used by `export` after a retrain).
+    """
     rows = []
     for seed in BLOCKS[block]["seeds"]:
-        d = LOGS / run_name(block, spread, seed)
-        if (d / "results.json").exists():
+        name = run_name(block, spread, seed)
+        d = (RUNS if source == "repo" else LOGS) / name
+        pol = WEIGHTS / f"{name}.npz" if source == "repo" else d / "policy_best.npz"
+        if (d / "results.json").exists() and pol.exists():
             r = json.load(open(d / "results.json"))
-            rows.append(dict(seed=seed, dir=d, val_VaR95=r["val_score"], selected_episode=r["selected_episode"],
+            rows.append(dict(seed=seed, dir=d, policy=pol, val_VaR95=r["val_score"], selected_episode=r["selected_episode"],
                              test_VaR95=r["test"]["VaR95"], sec_per_1000=r["seconds_per_1000_episodes"]))
     rows.sort(key=lambda r: r["val_VaR95"])
     return rows
@@ -238,14 +247,14 @@ def cmd_main(args):
         if not rows:
             continue
         for r in rows:
-            seeds_rows.append(dict(block=blk, spread=spread, **{k: v for k, v in r.items() if k != "dir"}))
+            seeds_rows.append(dict(block=blk, spread=spread, **{k: v for k, v in r.items() if k not in ("dir", "policy")}))
         sel, med = pick(rows)
         b0 = base[f"{spread}_0"]
         rule_b = b0["rule_b_VaR95"]
         p_dg = net(test.rule("DG"), spread)
         p_rule = net(test.frac(rule_b["a"], rule_b["b"], rule_b["w"]), spread)
         for label, r in (("selected", sel), ("median", med)):
-            f, _ = policy_decider(r["dir"] / "policy_best.npz")
+            f, _ = policy_decider(r["policy"])
             res = rollout(test_m, f, vega_obs)
             np.savez_compressed(OUT / f"rl_test_{blk}_{spread}_{label}.npz", **{k: v for k, v in res.items()
                                                                               if isinstance(v, np.ndarray)})
@@ -343,7 +352,7 @@ def cmd_deltacost(args):
 def cmd_robustness(args):
     spread = 0.02
     sel, _ = pick(runs_of("B", spread))
-    f, _ = policy_decider(sel["dir"] / "policy_best.npz")
+    f, _ = policy_decider(sel["policy"])
     base = json.load(open(OUT / "baselines_B.json"))[f"{spread}_0"]
     ra, rb = base["rule_a_VaR95"], base["rule_b_VaR95"]
     rows = []
@@ -476,13 +485,17 @@ def cmd_export(args):
     rows = []
     for blk in BLOCKS:
         for spread in COSTS:
-            runs = runs_of(blk, spread)
+            runs = runs_of(blk, spread, source="logs")
             if not runs:
                 continue
             sel, med = pick(runs)
             for r in runs:
                 name = run_name(blk, spread, r["seed"]) + ".npz"
-                shutil.copy(r["dir"] / "policy_best.npz", W / name)
+                shutil.copy(r["policy"], W / name)
+                R = RUNS / run_name(blk, spread, r["seed"])
+                R.mkdir(parents=True, exist_ok=True)
+                for f in ("config.json", "results.json", "validation.csv"):
+                    shutil.copy(r["dir"] / f, R / f)
                 rows.append(dict(model=BLOCKS[blk]["tag"], objective="VaR95",
                                  option_cost=spread, seed=r["seed"], file=f"weights/{name}",
                                  selected=r is sel, median=r is med, val_VaR95=r["val_VaR95"],

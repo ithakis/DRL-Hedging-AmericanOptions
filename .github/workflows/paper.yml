@@ -1,0 +1,59 @@
+# Manual button (Actions tab -> "Build paper" -> Run workflow).
+# Default: tables + figures from the stored result files and weights, then the PDF (`make paper`, minutes).
+# Option "results": first re-evaluate every stored agent and re-tune the baselines (`make results`, about
+# 1-2 hours on a GitHub runner). Training from scratch (`make retrain`, days) is local only.
+name: Build paper
+
+on:
+  workflow_dispatch:
+    inputs:
+      results:
+        description: "Also regenerate all results from the stored weights (make results, ~1-2 h)"
+        type: boolean
+        default: false
+
+jobs:
+  paper:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Install Python packages (CPU torch)
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements-torch.txt
+
+      - name: Results from the stored weights (optional)
+        if: inputs.results
+        run: make results
+
+      - name: Tables and figures
+        run: make tables figures
+
+      - name: Show what changed against the committed results (should be nothing)
+        run: git status --short -- review/results && git diff --stat -- review/results
+
+      - name: Compile PDF (only on branches that hold the paper source)
+        if: hashFiles('Paper__Higher_Order_Hedging_for_Am_Opt_DRL/main.tex') != ''
+        uses: xu-cheng/latex-action@v3
+        with:
+          root_file: main.tex
+          working_directory: Paper__Higher_Order_Hedging_for_Am_Opt_DRL
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: paper
+          path: |
+            Paper__Higher_Order_Hedging_for_Am_Opt_DRL/main.pdf
+            review/results/paper/
+            review/results/retrain/*.csv
+            review/results/retrain/*.md
+            review/results/retrain/*.json
+            review/retrain_report.md
+          if-no-files-found: warn
