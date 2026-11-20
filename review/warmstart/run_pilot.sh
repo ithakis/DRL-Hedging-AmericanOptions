@@ -14,6 +14,9 @@ for V in $VARIANT; do VARIANT=$V; case $V in
   # pilot 2: slower, conservative actor (pilot 1 drifted away from the rule as soon as the actor learned)
   res02lr) EXTRA="--residual_scale 0.2 --actor_lr 1e-5 --actor_freeze_episodes 2000 --val_at_start --train_episodes 20000" ;;
   res05l2) EXTRA="--residual_scale 0.5 --actor_lr 1e-5 --residual_l2 2 --actor_freeze_episodes 2000 --val_at_start --train_episodes 20000" ;;
+  # option 1: learned gate (trade the rule amount or not), train_gate.py
+  gate0) EXTRA="--gate_warmup_episodes 2000 --margin 0 --train_episodes 20000" ;;
+  gate05) EXTRA="--gate_warmup_episodes 2000 --margin 0.5 --train_episodes 20000" ;;
   *) echo "unknown variant $V" >&2; exit 1 ;;
 esac
 for seed in $SEEDS; do for c in 0.005 0.01 0.02; do
@@ -22,6 +25,7 @@ for seed in $SEEDS; do for c in 0.005 0.01 0.02; do
   [ -f $OUT/$name/results.json ] && { echo "skip $name" >&2; continue; }
   ARGS=$(python -c "from review.retrain.settings import train_args; print(' '.join(train_args('B', $c, $seed, out='$OUT')))")
   ARGS=${ARGS/--run_name HestonP_var_spread${c}_seed${seed}/--run_name $name}
-  echo "$name $ARGS --market_dir $MARKETS --warm_rule $R --n_train_paths 40000 $EXTRA"
+  SCRIPT=train_d4pg.py; case $V in gate*) SCRIPT=train_gate.py;; esac
+  echo "$name $SCRIPT $ARGS --market_dir $MARKETS --warm_rule $R --n_train_paths 40000 $EXTRA"
 done; done; done | xargs -P "$P" -L 1 bash -c 'echo "$(date +%H:%M) start $0"; \
-  python train_d4pg.py "$@" > "logs_torch/warmstart/_stdout/$0.log" 2>&1; echo "$(date +%H:%M) end $0 (exit $?)"'
+  python "$@" > "logs_torch/warmstart/_stdout/$0.log" 2>&1; echo "$(date +%H:%M) end $0 (exit $?)"'

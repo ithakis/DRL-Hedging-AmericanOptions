@@ -119,3 +119,36 @@ class ResidualRuleEnv(HedgingEnv):
         f = np.clip(self.rule_fraction() + self.scale * u, 0.0, 1.0)
         self.last_frac = f
         return super().step(f)
+
+
+class GateRuleEnv(ResidualRuleEnv):
+    """Learned gate on top of the rule: each day the agent chooses g in {0, 1}.
+
+        x_full = clip(a n_G + b n_V, [lo, hi])      (rule (b) without its band)
+        traded = g * x_full                         (g = 0: no hedge-option trade today)
+    Rule (b) is the gate g_rule = 1[|x_full| >= w], so the agent can learn a state-dependent band.
+    step(g) takes g in {0, 1} (B,).
+    """
+
+    def full_trade(self):
+        t, b = self.t, self.b
+        G, V = self._port(t)
+        lo, hi = self.bounds()
+        with np.errstate(divide="ignore", invalid="ignore"):
+            n_g = np.nan_to_num(-G / b["h_gamma"][:, t, t], nan=0.0)
+            n_v = np.nan_to_num(-V / b["h_vega"][:, t, t], nan=0.0) if self.vega_obs else np.zeros_like(n_g)
+            x = np.clip(self.rule_a * n_g + self.rule_b * n_v, lo, hi)
+        return np.nan_to_num(x, nan=0.0), lo, hi
+
+    def rule_gate(self):
+        x, _, _ = self.full_trade()
+        return (np.abs(x) >= self.rule_w).astype(float)
+
+    def step(self, g):
+        x, lo, hi = self.full_trade()
+        x = np.asarray(g, dtype=float).reshape(self.B) * x
+        with np.errstate(divide="ignore", invalid="ignore"):
+            f = np.where(hi > lo, (x - lo) / (hi - lo), 0.0)
+        f = np.clip(np.nan_to_num(f, nan=0.0), 0.0, 1.0)
+        self.last_frac = f
+        return HedgingEnv.step(self, f)
