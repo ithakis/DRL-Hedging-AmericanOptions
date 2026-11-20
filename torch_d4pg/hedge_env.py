@@ -17,13 +17,15 @@ import numpy as np
 
 
 class HedgingEnv:
+    extra_obs = False  # class switch (batch B): append [time left t/T, volatility V_t] to the state
+
     def __init__(self, market, spread: float, vega_obs: bool):
         self.m = market
         self.spread = float(spread)
         self.vega_obs = bool(vega_obs)
         self.P, self.T1 = market["S"].shape
         self.T = self.T1 - 1  # number of hedging steps per episode
-        self.obs_dim = 5 if vega_obs else 3
+        self.obs_dim = (5 if vega_obs else 3) + (2 if HedgingEnv.extra_obs else 0)
 
     # ------------------------------------------------------------------
     def reset(self, idx):
@@ -50,6 +52,8 @@ class HedgingEnv:
         cols = [b["S"][:, t], G, b["h_gamma"][:, t, t]]
         if self.vega_obs:
             cols += [V, b["h_vega"][:, t, t]]
+        if HedgingEnv.extra_obs:
+            cols += [np.full(self.B, 1.0 - t / self.T), b["V"][:, t]]
         obs = np.stack(cols, axis=1)
         if t == self.T:
             obs[:, 1:] = 0.0

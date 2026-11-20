@@ -127,6 +127,11 @@ def get_args(argv=None):
                    "(VaR/CVaR choices are scale-invariant)")
     g.add_argument("--ema_decay", type=float, default=0.0, help="eval-only EMA of the actor weights (0 = off)")
     g.add_argument("--n_envs", type=int, default=1, help="paths simulated in parallel per training episode batch")
+    g = ap.add_argument_group("batch B (defaults = PR #3)")
+    g.add_argument("--extra_obs", action="store_true", help="state + [time left t/T, volatility V_t]")
+    g.add_argument("--train_obj", choices=["meanstd", "var", "cvar"], default=None,
+                   help="objective of the actor/critic; default = --obj_func (selection always uses --obj_func)")
+    g.add_argument("--tail_quantiles", action="store_true", help="critic quantile levels dense in the loss tail")
     g.add_argument("--val_at_start", action="store_true",
                    help="also validate the untrained policy (episode 0, = the rule when --warm_rule); "
                         "logged only, never selected")
@@ -136,6 +141,7 @@ def get_args(argv=None):
     g.add_argument("--run_name", default=None)
     g.add_argument("--export_test_market", action="store_true")
     a = ap.parse_args(argv)
+    HedgingEnv.extra_obs = bool(a.extra_obs)
     if a.vega_obs is None:
         a.vega_obs = a.process == "Heston"
     if a.n_train_paths is None:
@@ -240,12 +246,13 @@ def main(argv=None):
     if a.obs_norm == "robust":
         center, scale = obs_stats(train_m, a.spread, a.vega_obs, seed=a.market_seed)
         print("obs median", np.round(center, 4), "IQR", np.round(scale, 4))
-    agent = D4PGQR(env.obs_dim, obj_func=a.obj_func, threshold=a.threshold, std_coef=a.std_coef, seed=a.seed,
+    agent = D4PGQR(env.obs_dim, obj_func=a.train_obj or a.obj_func, threshold=a.threshold, std_coef=a.std_coef, seed=a.seed,
                    actor_sizes=a.actor_sizes, critic_sizes=a.critic_sizes, lr=a.lr, batch_size=a.batch_size,
                    n_step=a.n_step, sigma=a.sigma, target_update_period=a.target_update_period,
                    min_replay_size=a.min_replay_size, samples_per_insert=a.samples_per_insert,
                    obs_center=center, obs_scale=scale, actor_lr=a.actor_lr, residual_l2=a.residual_l2,
-                   tau=a.tau, reward_scale=a.reward_scale, ema_decay=a.ema_decay, n_envs=a.n_envs)
+                   tau=a.tau, reward_scale=a.reward_scale, ema_decay=a.ema_decay, n_envs=a.n_envs,
+                   tail_quantiles=a.tail_quantiles)
 
     rows, best = [], dict(score=np.inf)
     t_train, t_val, ep_rewards = 0.0, 0.0, []
@@ -307,7 +314,7 @@ def main(argv=None):
     meta = dict(process=a.process, obj_func=a.obj_func, spread=a.spread, vega_obs=a.vega_obs,
                 seed=a.seed, selected_episode=best["episode"], val_score=best["score"],
                 warm_rule=a.warm_rule, residual_scale=a.residual_scale,
-                obs=["S", "portfolio_gamma", "hedge_gamma"] + (["portfolio_vega", "hedge_vega"] if a.vega_obs else []))
+                obs=["S", "portfolio_gamma", "hedge_gamma"] + (["portfolio_vega", "hedge_vega"] if a.vega_obs else []) + (["time_left", "vol"] if a.extra_obs else []))
     export_actor_npz(agent.actor_eval, out / "policy_best.npz", meta)
 
     res = dict(run_name=a.run_name, selected_episode=best["episode"], val_score=best["score"],
