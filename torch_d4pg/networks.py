@@ -96,9 +96,12 @@ class Actor(nn.Module):
         return torch.tanh(self.preact(obs))
 
 
-def quantile_grid(interval: float = 0.01):
-    """Quantile levels and MID probabilities exactly as agent/distributional.py (99 levels)."""
+def quantile_grid(interval: float = 0.01, tail: bool = False):
+    """Quantile levels and MID probabilities exactly as agent/distributional.py (99 levels).
+    tail=True: denser levels in the loss tail (0.25% steps below 10%, 2% steps above; 84 levels)."""
     q = np.arange(interval, 1.0, interval)
+    if tail:
+        q = np.r_[np.arange(0.0025, 0.0999, 0.0025), np.arange(0.10, 0.9901, 0.02)]
     left = q - np.insert(q[:-1], 0, 0.0)
     right = np.insert(q[1:], len(q) - 1, 1.0) - q
     return q, (left + right) / 2
@@ -108,10 +111,10 @@ class QuantileCritic(nn.Module):
     """Returns the quantile values Z(s, a) of shape (batch, n_quantiles)."""
 
     def __init__(self, obs_dim: int, sizes: Sequence[int] = (512, 512, 256), quantile_interval: float = 0.01,
-                 norm: ObsNormalizer = None):
+                 norm: ObsNormalizer = None, tail_quantiles: bool = False):
         super().__init__()
         self.norm_in = norm if norm is not None else ObsNormalizer(obs_dim)
-        q, p = quantile_grid(quantile_interval)
+        q, p = quantile_grid(quantile_interval, tail_quantiles)
         self.register_buffer("quantiles", torch.tensor(q, dtype=torch.float32))
         self.register_buffer("probs", torch.tensor(p, dtype=torch.float32))
         self.body = LayerNormMLP(obs_dim + 1, sizes)
