@@ -33,7 +33,7 @@ class D4PGQR:
                  batch_size=256, n_step=5, discount=1.0, sigma=0.3, target_update_period=100,
                  min_replay_size=1000, samples_per_insert=32.0, max_replay_size=1_000_000,
                  clip_norm=40.0, dqda_clip=1.0, obs_center=None, obs_scale=None, obs_clip=10.0,
-                 actor_lr=None, residual_l2=0.0):
+                 actor_lr=None, residual_l2=0.0, tau=0.0, reward_scale=1.0, ema_decay=0.0, n_envs=1):
         torch.manual_seed(seed)
         self.rng = np.random.default_rng(seed)
         self.cfg = dict(obs_dim=obs_dim, obj_func=obj_func, threshold=threshold, std_coef=std_coef, seed=seed,
@@ -44,7 +44,8 @@ class D4PGQR:
                         clip_norm=clip_norm, dqda_clip=dqda_clip,
                         obs_center=None if obs_center is None else [float(x) for x in obs_center],
                         obs_scale=None if obs_scale is None else [float(x) for x in obs_scale],
-                        obs_clip=obs_clip, actor_lr=actor_lr, residual_l2=residual_l2)
+                        obs_clip=obs_clip, actor_lr=actor_lr, residual_l2=residual_l2, tau=tau,
+                        reward_scale=reward_scale, ema_decay=ema_decay, n_envs=n_envs)
         self.actor = Actor(obs_dim, actor_sizes, ObsNormalizer(obs_dim, obs_center, obs_scale, obs_clip))
         self.critic = QuantileCritic(obs_dim, critic_sizes, norm=ObsNormalizer(obs_dim, obs_center, obs_scale, obs_clip))
         self.actor_target = copy.deepcopy(self.actor)
@@ -54,7 +55,12 @@ class D4PGQR:
         self.actor_opt = torch.optim.Adam(self.actor.parameters(), lr=actor_lr or lr, eps=1e-8)
         self.critic_opt = torch.optim.Adam(self.critic.parameters(), lr=lr, eps=1e-8)
         self.objective = RiskObjective(obj_func, self.critic.quantiles, self.critic.probs, threshold, std_coef)
-        self.memory = CircularReplayBuffer(max_replay_size, batch_size, n_step, 1, torch.device("cpu"),
+        # eval-only EMA of the actor weights (swing Task 2); self.actor_eval is what validation/test use
+        self.actor_ema = copy.deepcopy(self.actor) if ema_decay > 0 else None
+        if self.actor_ema is not None:
+            for p in self.actor_ema.parameters():
+                p.requires_grad_(False)
+        self.memory = CircularReplayBuffer(max_replay_size, batch_size, n_step, n_envs, torch.device("cpu"),
                                            seed, discount)
         self.discount_n = discount ** n_step
         self.obs_per_step = batch_size / samples_per_insert
@@ -78,7 +84,13 @@ class D4PGQR:
         return (np.asarray(u).reshape(-1) + 1.0) / 2.0  # acme CanonicalSpecWrapper: [-1,1] -> [0,1]
 
     # ------------------------------------------------------------------ learning
+    @property
+    def actor_eval(self):
+        return self.actor_ema if self.actor_ema is not None else self.actor
+
     def observe(self, obs, u, reward, next_obs, done):
+        """One transition. With n_envs > 1, call it for env 0, 1, ..., n_envs-1 in turn (round robin)."""
+        reward = reward * self.cfg["reward_scale"]
         self.memory.add(np.asarray(obs, np.float32), np.asarray(u, np.float32).reshape(1), float(reward),
                         np.asarray(next_obs, np.float32), bool(done))
         self.n_observed += 1
@@ -96,8 +108,19 @@ class D4PGQR:
         self.actor_target.load_state_dict(self.actor.state_dict())
         self.critic_target.load_state_dict(self.critic.state_dict())
 
+    def _soft_update(self, tau):
+        with torch.no_grad():
+            for net, tgt in ((self.actor, self.actor_target), (self.critic, self.critic_target)):
+                for p, pt in zip(net.parameters(), tgt.parameters()):
+                    pt.mul_(1 - tau).add_(p, alpha=tau)
+                for b, bt in zip(net.buffers(), tgt.buffers()):
+                    bt.copy_(b)
+
     def learn(self):
-        if self.learner_steps % self.cfg["target_update_period"] == 0:
+        if self.cfg["tau"] > 0:
+            if self.learner_steps == 0:
+                self._hard_update()
+        elif self.learner_steps % self.cfg["target_update_period"] == 0:
             self._hard_update()
         self.learner_steps += 1
         o_tm1, a_tm1, r_t, o_t, done, _, _ = self.memory.sample()
@@ -115,6 +138,10 @@ class D4PGQR:
 
         if not self.train_actor:
             self.last_losses = (float(critic_loss.detach()), np.nan)
+            if self.cfg["tau"] > 0:
+                self._soft_update(self.cfg["tau"])
+            if self.actor_ema is not None:  # actor frozen: keep the EMA equal to it
+                self.actor_ema.load_state_dict(self.actor.state_dict())
             return
         # actor (trfl/acme dpg loss with dqda clipping)
         a = self.actor(o_t)
@@ -134,10 +161,20 @@ class D4PGQR:
         self.actor_opt.step()
         self.critic.zero_grad(set_to_none=True)  # dqda pass left critic grads; not applied
         self.last_losses = (float(critic_loss.detach()), float(actor_loss.detach()))
+        self._after_step()
+
+    def _after_step(self):
+        if self.cfg["tau"] > 0:
+            self._soft_update(self.cfg["tau"])
+        if self.actor_ema is not None:
+            d = self.cfg["ema_decay"]
+            with torch.no_grad():
+                for p, pe in zip(self.actor.parameters(), self.actor_ema.parameters()):
+                    pe.mul_(d).add_(p, alpha=1 - d)
 
     # ------------------------------------------------------------------ checkpoints
     def actor_state(self):
-        return {k: v.detach().clone() for k, v in self.actor.state_dict().items()}
+        return {k: v.detach().clone() for k, v in self.actor_eval.state_dict().items()}
 
     def save(self, path, actor_state=None):
         torch.save(dict(cfg=self.cfg, actor=actor_state or self.actor.state_dict(),

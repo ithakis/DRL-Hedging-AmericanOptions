@@ -119,7 +119,14 @@ def get_args(argv=None):
     g.add_argument("--residual_l2", type=float, default=0.0,
                    help="actor loss + residual_l2 * 0.5 u^2: keeps the residual small (stay near the rule) "
                         "unless the critic gradient is larger (TD3+BC-like)")
-    g.add_argument("--actor_lr", type=float, default=None, help="default = --lr")
+    g.add_argument("--actor_lr", type=float, default=None, help="default = --lr (then --lr is the critic LR only)")
+    g = ap.add_argument_group("training recipe (batch A; defaults = PR #3 recipe)")
+    g.add_argument("--tau", type=float, default=0.0, help="Polyak target update rate; 0 = hard copy every "
+                   "--target_update_period learner steps")
+    g.add_argument("--reward_scale", type=float, default=1.0, help="rewards fed to the critic are multiplied by this "
+                   "(VaR/CVaR choices are scale-invariant)")
+    g.add_argument("--ema_decay", type=float, default=0.0, help="eval-only EMA of the actor weights (0 = off)")
+    g.add_argument("--n_envs", type=int, default=1, help="paths simulated in parallel per training episode batch")
     g.add_argument("--val_at_start", action="store_true",
                    help="also validate the untrained policy (episode 0, = the rule when --warm_rule); "
                         "logged only, never selected")
@@ -188,7 +195,7 @@ def make_env(market, spread, vega_obs, a=None):
 def evaluate(agent_or_actor, market, spread, vega_obs, chunk=8192, actions=None, a=None):
     """Greedy policy on all paths of a market. Returns episode P&L and option costs.
     If a list is passed as `actions`, the hedge fractions are appended to it."""
-    actor = agent_or_actor.actor if hasattr(agent_or_actor, "actor") else agent_or_actor
+    actor = agent_or_actor.actor_eval if hasattr(agent_or_actor, "actor_eval") else agent_or_actor
     env = make_env(market, spread, vega_obs, a)
     pnl, cost = [], []
     for s in range(0, env.P, chunk):
@@ -237,7 +244,8 @@ def main(argv=None):
                    actor_sizes=a.actor_sizes, critic_sizes=a.critic_sizes, lr=a.lr, batch_size=a.batch_size,
                    n_step=a.n_step, sigma=a.sigma, target_update_period=a.target_update_period,
                    min_replay_size=a.min_replay_size, samples_per_insert=a.samples_per_insert,
-                   obs_center=center, obs_scale=scale, actor_lr=a.actor_lr, residual_l2=a.residual_l2)
+                   obs_center=center, obs_scale=scale, actor_lr=a.actor_lr, residual_l2=a.residual_l2,
+                   tau=a.tau, reward_scale=a.reward_scale, ema_decay=a.ema_decay, n_envs=a.n_envs)
 
     rows, best = [], dict(score=np.inf)
     t_train, t_val, ep_rewards = 0.0, 0.0, []
@@ -253,17 +261,19 @@ def main(argv=None):
         print(f"ep      0 (untrained, not selectable) | val VaR95 {s['VaR95']:.2f}, CVaR95 {s['CVaR95']:.2f}, "
               f"mean {s['mean_pnl']:.2f}, action mean {acts.mean():.3f}", flush=True)
     tic = time.time()
-    for ep in range(a.train_episodes):
+    K = a.n_envs
+    for ep in range(K - 1, a.train_episodes, K):  # ep = index of the last episode of this batch of K paths
         agent.train_actor = ep >= a.actor_freeze_episodes
-        obs = env.reset([ep % env.P])
-        done, tot = False, 0.0
+        obs = env.reset(np.arange(ep - K + 1, ep + 1) % env.P)
+        done, tot = False, np.zeros(K)
         while not done:
             u = agent.policy(obs, noise=True)
             next_obs, r, done, _ = env.step(agent.to_env_action(u))
-            agent.observe(obs[0], u[0], r[0], next_obs[0], done)
-            obs, tot = next_obs, tot + r[0]
-        ep_rewards.append(tot)
-        if (ep + 1) % a.val_every == 0 or ep + 1 == a.train_episodes:
+            for i in range(K):
+                agent.observe(obs[i], u[i], r[i], next_obs[i], done)
+            obs, tot = next_obs, tot + r
+        ep_rewards.extend(tot.tolist())
+        if (ep + 1) % a.val_every < K or ep + 1 >= a.train_episodes:
             t_train += time.time() - tic
             tv = time.time()
             acts = []
@@ -293,12 +303,12 @@ def main(argv=None):
 
     agent.save(out / "final_actor.pt")
     agent.save(out / "best_actor.pt", actor_state=best["actor"])
-    agent.actor.load_state_dict(best["actor"])
+    agent.actor_eval.load_state_dict(best["actor"])
     meta = dict(process=a.process, obj_func=a.obj_func, spread=a.spread, vega_obs=a.vega_obs,
                 seed=a.seed, selected_episode=best["episode"], val_score=best["score"],
                 warm_rule=a.warm_rule, residual_scale=a.residual_scale,
                 obs=["S", "portfolio_gamma", "hedge_gamma"] + (["portfolio_vega", "hedge_vega"] if a.vega_obs else []))
-    export_actor_npz(agent.actor, out / "policy_best.npz", meta)
+    export_actor_npz(agent.actor_eval, out / "policy_best.npz", meta)
 
     res = dict(run_name=a.run_name, selected_episode=best["episode"], val_score=best["score"],
                seconds_market=t_market, seconds_train=t_train, seconds_validation=t_val,
