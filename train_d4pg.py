@@ -287,7 +287,7 @@ def main(argv=None):
                   f"(VaR95 {s['VaR95']:.2f}, CVaR95 {s['CVaR95']:.2f}, mean {s['mean_pnl']:.2f}) "
                   f"| action mean {acts.mean():.3f}, <0.01 {100 * (acts < 0.01).mean():.0f}%, "
                   f">0.99 {100 * (acts > 0.99).mean():.0f}% "
-                  f"| best ep {best['episode']}", flush=True)
+                  f"| best ep {best.get('episode', '-')}", flush=True)
             pd.DataFrame(rows).to_csv(out / "validation.csv", index=False)
             tic = time.time()
 
