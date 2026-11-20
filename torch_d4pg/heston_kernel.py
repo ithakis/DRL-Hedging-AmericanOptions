@@ -128,47 +128,94 @@ def gh_nodes(m):
 
 
 class HestonKernel:
-    """One-step quadrature over (Z1, Z2) for the Heston P-dynamics (Euler on log S and v, v floored),
-    then recompute reward and next state of the hedging env at each node.
+    """Quadrature over the one-step law of the market's OWN simulator: the Andersen (2008) QE scheme
+    with martingale correction (environment/utils.py get_sim_path_Heston, psiC = 1.5, gamma1 = gamma2 = 0.5).
 
-    transition(p, t, n, cost) -> rewards (B, M), next_obs (B, M, d), done (B,), weights (M,)
+      variance:  psi <= psiC: v' = a (b + Z1)^2      -> Gauss-Hermite in Z1 (m_x nodes)
+                 psi >  psiC: v' = 0 w.p. p, else Exp -> one node at 0 (weight p) + (m_x - 1) Gauss-Laguerre nodes
+      log-price: ln S' = ln S + (r + mu - q) dt + K0* + K1 v + K2 v' + sqrt(K3 v + K4 v') Z2  -> Gauss-Hermite in Z2
+    So the nodes integrate exactly the law the training paths are drawn from (up to quadrature error);
+    weights differ per transition in the psi > psiC regime, hence weights of shape (B, M).
+
+    transition(p, t, n, cost) -> rewards (B, M), next_obs (B, M, d), done (B,), weights (B, M)
       p: path index, t: step, n: contracts held of each issued hedge (B, T1) AFTER the trade at t,
       cost: option cost of the trade at t (B,) (<= 0).
-    With nodes=None the realised next step of the path is used (M = 1): this reproduces the env exactly
-    (test of the bookkeeping).
+    realised=True uses the realised next step of the path (M = 1): reproduces the env exactly (bookkeeping test).
     """
 
-    def __init__(self, utils, market, c, vega_obs=True, m_x=3, mu=None, v_floor=1e-4):
+    def __init__(self, utils, market, c, vega_obs=True, m_x=3, psiC=1.5, gamma1=0.5, gamma2=0.5):
         self.bk = Book(utils, market, c)
         self.m = {k: np.asarray(market[k]) for k in ("S", "V", "l_price", "l_delta", "h_price", "h_delta")}
-        self.L = -100.0 if utils.num_conts_to_add == -1 else None
-        self.L = float(np.median(np.asarray(market["l_price"])[:64, 0] / self.bk.liab(
-            np.arange(64), 0, np.asarray(market["S"])[:64, :1], np.asarray(market["V"])[:64, :1], np.zeros(64, int))[0][:, 0]))
+        n0 = min(64, self.bk.P)
+        self.L = float(np.median(self.m["l_price"][:n0, 0] / self.bk.liab(
+            np.arange(n0), 0, self.m["S"][:n0, :1], self.m["V"][:n0, :1], 0)[0][:, 0]))
         self.vega_obs = vega_obs
         self.T = self.bk.T1 - 1
-        self.dt = 1.0 / utils.TradingDaysPerYear
-        self.mu = utils.mu if mu is None else mu
-        self.kappa, self.theta, self.xi, self.rho = utils.kappa, utils.theta, utils.volvol, utils.rho
-        self.v_floor = v_floor
-        z, w = gh_nodes(m_x)
-        Z1, Z2 = np.meshgrid(z, z, indexing="ij")
-        self.z1, self.z2 = Z1.ravel(), Z2.ravel()
-        self.w = np.outer(w, w).ravel()
+        lam = getattr(utils, "lambda_v", 0.0)
+        kappa = utils.kappa - lam
+        theta = utils.kappa * utils.theta / kappa
+        xi, rho, dt = utils.volvol, utils.rho, utils.dt
+        self.kappa, self.theta, self.xi, self.dt, self.psiC = kappa, theta, xi, dt, psiC
+        self.drift = (utils.r + utils.mu - utils.q) * dt
+        self.E = np.exp(-kappa * dt)
+        self.K1 = (kappa * rho / xi - 0.5) * gamma1 * dt - rho / xi
+        self.K2 = (kappa * rho / xi - 0.5) * gamma2 * dt + rho / xi
+        self.K3 = (1 - rho ** 2) * gamma1 * dt
+        self.K4 = (1 - rho ** 2) * gamma2 * dt
+        self.A = self.K2 + 0.5 * self.K4
+        self.m_x = m_x
+        self.zh, self.wh = gh_nodes(m_x)                        # normal nodes (Z1 and Z2)
+        xl, wl = np.polynomial.laguerre.laggauss(max(m_x - 1, 1))  # Exp(1) nodes
+        self.xl, self.wl = xl, wl / wl.sum()
+        self.M = m_x * m_x
+        self.w = np.outer(self.wh, self.wh).ravel()  # weights in the psi <= psiC regime (most transitions)
 
     def nodes(self, S, vol):
-        v = vol[:, None] ** 2
-        dt, sq = self.dt, np.sqrt(vol[:, None] ** 2 * self.dt)
-        S1 = S[:, None] * np.exp((self.mu - 0.5 * v) * dt + sq * self.z1[None, :])
-        v1 = v + self.kappa * (self.theta - v) * dt + self.xi * sq * (self.rho * self.z1 + np.sqrt(1 - self.rho ** 2) * self.z2)[None, :]
-        return S1, np.sqrt(np.maximum(v1, self.v_floor))
+        """(B,) -> S1, vol1, w, each (B, M) with M = m_x^2 (index = i_v * m_x + i_z2)."""
+        v = vol ** 2
+        E, k, th, xi = self.E, self.kappa, self.theta, self.xi
+        mm = th + (v - th) * E
+        s2 = v * xi ** 2 * E / k * (1 - E) + th * xi ** 2 / (2 * k) * (1 - E) ** 2
+        psi = s2 / mm ** 2
+        B, mx = len(v), self.m_x
+        v1 = np.zeros((B, mx))
+        wv = np.zeros((B, mx))
+        K0s = np.zeros(B)
+        lo = psi <= self.psiC
+        if np.any(lo):
+            ps = psi[lo]
+            b2 = 2 / ps - 1 + np.sqrt(2 / ps * (2 / ps - 1))
+            b = np.sqrt(b2)
+            a = mm[lo] / (1 + b2)
+            v1[lo] = a[:, None] * (b[:, None] + self.zh[None, :]) ** 2
+            wv[lo] = self.wh[None, :]
+            K0s[lo] = -(self.A * b2 * a) / (1 - 2 * self.A * a) + 0.5 * np.log(1 - 2 * self.A * a)
+        hi = ~lo
+        if np.any(hi):
+            ps = psi[hi]
+            pp = (ps - 1) / (ps + 1)
+            beta = (1 - pp) / mm[hi]
+            v1[hi, 0] = 0.0
+            wv[hi, 0] = pp
+            v1[hi, 1:] = (self.xl[None, :mx - 1] / beta[:, None])
+            wv[hi, 1:] = (1 - pp)[:, None] * self.wl[None, :mx - 1]
+            K0s[hi] = -np.log(pp + beta * (1 - pp) / (beta - self.A))
+        K0s = K0s - (self.K1 + 0.5 * self.K3) * v
+        # combine with Z2 nodes
+        v1f = np.repeat(v1, mx, axis=1)                       # (B, M): i_v major
+        z2 = np.tile(self.zh, mx)[None, :]
+        w = np.repeat(wv, mx, axis=1) * np.tile(self.wh, mx)[None, :]
+        lnS1 = (np.log(S)[:, None] + self.drift + K0s[:, None] + self.K1 * v[:, None] + self.K2 * v1f
+                + np.sqrt(np.maximum(self.K3 * v[:, None] + self.K4 * v1f, 0.0)) * z2)
+        return np.exp(lnS1), np.sqrt(v1f), w
 
     def transition(self, p, t, n, cost, realised=False):
         m, bk, B = self.m, self.bk, len(p)
         S, vol = m["S"][p, t], m["V"][p, t]
         if realised:
-            S1, vol1, w = m["S"][p, t + 1][:, None], m["V"][p, t + 1][:, None], np.ones(1)
+            S1, vol1, w = m["S"][p, t + 1][:, None], m["V"][p, t + 1][:, None], np.ones((len(p), 1))
         else:
-            (S1, vol1), w = self.nodes(S, vol), self.w
+            S1, vol1, w = self.nodes(S, vol)
         t1 = t + 1
         # P&L over (t, t+1]: book held at t, valued at t+1 (arrivals at t+1 excluded, as l_next)
         lp1 = self.L * bk.liab(p, t1, S1, vol1, t)[0]

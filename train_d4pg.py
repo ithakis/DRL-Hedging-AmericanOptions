@@ -260,8 +260,8 @@ def main(argv=None):
         u.table_dir = a.table_dir
         _, _, c_book = book_arrivals(u)
         kernel = HestonKernel(u, train_m, c_book, a.vega_obs, m_x=a.kernel_mx)
-        agent_cls, extra_kw = D4PGKernel, dict(kernel_weights=kernel.w)
-        print(f"kernel target: {len(kernel.w)} nodes, liability scale {kernel.L}")
+        agent_cls, extra_kw = D4PGKernel, dict(n_nodes=kernel.M)
+        print(f"kernel target: {kernel.M} nodes, liability scale {kernel.L}")
     agent = agent_cls(env.obs_dim, **extra_kw, obj_func=a.train_obj or a.obj_func, threshold=a.threshold, std_coef=a.std_coef, seed=a.seed,
                    actor_sizes=a.actor_sizes, critic_sizes=a.critic_sizes, lr=a.lr, batch_size=a.batch_size,
                    n_step=a.n_step, sigma=a.sigma, target_update_period=a.target_update_period,
@@ -296,8 +296,8 @@ def main(argv=None):
             next_obs, r, done, x = env.step(agent.to_env_action(u))
             if kernel is not None:
                 cost = -np.abs(a.spread * x * env.b["h_price"][:, t_now, t_now])
-                rk, ok, _, _ = kernel.transition(paths, np.full(K, t_now), env.n.copy(), cost)
-                agent.observe_batch(obs, u, rk, ok, next_obs, done)
+                rk, ok, _, wk = kernel.transition(paths, np.full(K, t_now), env.n.copy(), cost)
+                agent.observe_batch(obs, u, rk, ok, next_obs, done, wk)
             else:
                 for i in range(K):
                     agent.observe(obs[i], u[i], r[i], next_obs[i], done)
