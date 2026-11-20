@@ -5,6 +5,12 @@ Gain vs rule (b) = rule (b) - RL, paired bootstrap SE; positive = RL better.
 
 | Variant | Cost | Seed | Sel. ep | Val VaR95 (ep 0 = rule) | Val VaR95 (sel.) | Test VaR95 | Rule (b) test | Gain vs rule (b) | RL of PR #3 (test) |
 |---|---|---|---|---|---|---|---|---|---|
+| A1 | 0.5% | 1 | 7504 | nan | 27.88 | 29.04 (0.60) | 24.87 | -4.17 (0.49) | 26.25 |
+| A1 | 1.0% | 1 | 13504 | nan | 31.63 | 32.30 (0.55) | 27.43 | -4.86 (0.47) | 29.95 |
+| A1 | 2.0% | 1 | 4512 | nan | 37.92 | 39.65 (0.76) | 32.56 | -7.09 (0.72) | 35.13 |
+| A2 | 0.5% | 1 | 12512 | nan | 29.51 | 29.84 (0.66) | 24.87 | -4.96 (0.57) | 26.25 |
+| A2 | 1.0% | 1 | 16000 | nan | 33.29 | 33.34 (0.60) | 27.43 | -5.91 (0.48) | 29.95 |
+| A2 | 2.0% | 1 | 13504 | nan | 40.66 | 41.88 (0.63) | 32.56 | -9.32 (0.55) | 35.13 |
 | gate0 | 0.5% | 1 | 16000 | 24.60 | 24.77 | 24.82 (0.50) | 24.87 | 0.05 (0.25) | 26.25 |
 | gate0 | 1.0% | 1 | 8000 | 27.87 | 28.33 | 28.14 (0.43) | 27.43 | -0.71 (0.25) | 29.95 |
 | gate0 | 2.0% | 1 | 7000 | 32.80 | 33.50 | 33.57 (0.45) | 32.56 | -1.01 (0.34) | 35.13 |
@@ -17,14 +23,3 @@ Gain vs rule (b) = rule (b) - RL, paired bootstrap SE; positive = RL better.
 | res05l2 | 0.5% | 1 | 8000 | 24.62 | 25.17 | 25.04 (0.44) | 24.87 | -0.16 (0.28) | 26.25 |
 | res05l2 | 1.0% | 1 | 19000 | 27.92 | 28.50 | 28.45 (0.49) | 27.43 | -1.02 (0.25) | 29.95 |
 | res05l2 | 2.0% | 1 | 17000 | 32.83 | 34.26 | 34.24 (0.50) | 32.56 | -1.68 (0.29) | 35.13 |
-
-## Gate pilot: validation checkpoints after the warm-up
-
-| Run | Rule (b) val VaR95 | Best val VaR95 | Checkpoints better than rule | Agreement with rule at best | Trade share at best |
-|---|---|---|---|---|---|
-| HestonP_var_spread0.005_seed1_gate0 | 24.60 | 24.77 (16000) | 0 of 18 | 0.67 | 0.70 |
-| HestonP_var_spread0.005_seed1_gate05 | 24.60 | 24.70 (20000) | 0 of 18 | 0.93 | 0.65 |
-| HestonP_var_spread0.01_seed1_gate0 | 27.87 | 28.33 (8000) | 0 of 18 | 0.66 | 0.52 |
-| HestonP_var_spread0.01_seed1_gate05 | 27.87 | 28.01 (19000) | 0 of 18 | 0.95 | 0.43 |
-| HestonP_var_spread0.02_seed1_gate0 | 32.80 | 33.50 (7000) | 0 of 18 | 0.69 | 0.44 |
-| HestonP_var_spread0.02_seed1_gate05 | 32.80 | 32.90 (6000) | 0 of 18 | 0.96 | 0.24 |
