@@ -132,6 +132,10 @@ def get_args(argv=None):
     g.add_argument("--train_obj", choices=["meanstd", "var", "cvar"], default=None,
                    help="objective of the actor/critic; default = --obj_func (selection always uses --obj_func)")
     g.add_argument("--tail_quantiles", action="store_true", help="critic quantile levels dense in the loss tail")
+    g = ap.add_argument_group("batch D: expected critic target over the Heston transition density (off by default)")
+    g.add_argument("--kernel_mx", type=int, default=0, help="Gauss-Hermite points per normal (nodes = mx^2); "
+                   "0 = off. Forces 1-step targets (torch_d4pg/agent_kernel.py)")
+    g.add_argument("--table_dir", default=None, help="Heston pricing table folder (default: repository pricing_tables)")
     g.add_argument("--val_at_start", action="store_true",
                    help="also validate the untrained policy (episode 0, = the rule when --warm_rule); "
                         "logged only, never selected")
@@ -246,7 +250,19 @@ def main(argv=None):
     if a.obs_norm == "robust":
         center, scale = obs_stats(train_m, a.spread, a.vega_obs, seed=a.market_seed)
         print("obs median", np.round(center, 4), "IQR", np.round(scale, 4))
-    agent = D4PGQR(env.obs_dim, obj_func=a.train_obj or a.obj_func, threshold=a.threshold, std_coef=a.std_coef, seed=a.seed,
+    kernel = None
+    agent_cls, extra_kw = D4PGQR, {}
+    if a.kernel_mx > 0:
+        assert a.process == "Heston" and not a.extra_obs, "kernel target: Heston, standard state only"
+        from torch_d4pg.agent_kernel import D4PGKernel
+        from torch_d4pg.heston_kernel import HestonKernel, book_arrivals
+        u = make_utils(argparse.Namespace(**{**vars(a), "spread": 0.0}), a.market_seed, a.n_train_paths)
+        u.table_dir = a.table_dir
+        _, _, c_book = book_arrivals(u)
+        kernel = HestonKernel(u, train_m, c_book, a.vega_obs, m_x=a.kernel_mx)
+        agent_cls, extra_kw = D4PGKernel, dict(kernel_weights=kernel.w)
+        print(f"kernel target: {len(kernel.w)} nodes, liability scale {kernel.L}")
+    agent = agent_cls(env.obs_dim, **extra_kw, obj_func=a.train_obj or a.obj_func, threshold=a.threshold, std_coef=a.std_coef, seed=a.seed,
                    actor_sizes=a.actor_sizes, critic_sizes=a.critic_sizes, lr=a.lr, batch_size=a.batch_size,
                    n_step=a.n_step, sigma=a.sigma, target_update_period=a.target_update_period,
                    min_replay_size=a.min_replay_size, samples_per_insert=a.samples_per_insert,
@@ -273,11 +289,18 @@ def main(argv=None):
         agent.train_actor = ep >= a.actor_freeze_episodes
         obs = env.reset(np.arange(ep - K + 1, ep + 1) % env.P)
         done, tot = False, np.zeros(K)
+        paths = np.arange(ep - K + 1, ep + 1) % env.P
         while not done:
             u = agent.policy(obs, noise=True)
-            next_obs, r, done, _ = env.step(agent.to_env_action(u))
-            for i in range(K):
-                agent.observe(obs[i], u[i], r[i], next_obs[i], done)
+            t_now = env.t
+            next_obs, r, done, x = env.step(agent.to_env_action(u))
+            if kernel is not None:
+                cost = -np.abs(a.spread * x * env.b["h_price"][:, t_now, t_now])
+                rk, ok, _, _ = kernel.transition(paths, np.full(K, t_now), env.n.copy(), cost)
+                agent.observe_batch(obs, u, rk, ok, next_obs, done)
+            else:
+                for i in range(K):
+                    agent.observe(obs[i], u[i], r[i], next_obs[i], done)
             obs, tot = next_obs, tot + r
         ep_rewards.extend(tot.tolist())
         if (ep + 1) % a.val_every < K or ep + 1 >= a.train_episodes:
