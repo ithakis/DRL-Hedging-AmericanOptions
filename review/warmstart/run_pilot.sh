@@ -27,6 +27,8 @@ for V in $VARIANT; do VARIANT=$V; case $V in
   L80) EXTRA="--train_episodes 80000" ;;
   # batch D pilot: expected target over the QE step (9 nodes, passes the fidelity test) vs 1-step sampled ablation
   K9) EXTRA="--kernel_mx 3 --table_dir ../DRL-Hedging-retrain/pricing_tables --n_envs 16 --train_episodes 20000 --val_every 500" ;;
+  S1B1) EXTRA="--extra_obs --n_step 1 --n_envs 16 --train_episodes 20000 --val_every 500" ;;
+  K9B1) EXTRA="--extra_obs --kernel_mx 3 --table_dir ../DRL-Hedging-retrain/pricing_tables --n_envs 16 --train_episodes 12000 --val_every 500" ;;
   S1) EXTRA="--n_step 1 --n_envs 16 --train_episodes 20000 --val_every 500" ;;
   *) echo "unknown variant $V" >&2; exit 1 ;;
 esac

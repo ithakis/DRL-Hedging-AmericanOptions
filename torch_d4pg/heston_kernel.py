@@ -143,7 +143,8 @@ class HestonKernel:
     realised=True uses the realised next step of the path (M = 1): reproduces the env exactly (bookkeeping test).
     """
 
-    def __init__(self, utils, market, c, vega_obs=True, m_x=3, psiC=1.5, gamma1=0.5, gamma2=0.5):
+    def __init__(self, utils, market, c, vega_obs=True, m_x=3, psiC=1.5, gamma1=0.5, gamma2=0.5, extra_obs=False):
+        self.extra_obs = extra_obs
         self.bk = Book(utils, market, c)
         self.m = {k: np.asarray(market[k]) for k in ("S", "V", "l_price", "l_delta", "h_price", "h_delta")}
         n0 = min(64, self.bk.P)
@@ -230,6 +231,8 @@ class HestonKernel:
         cols = [S1, self.L * lg + hg, bk.cs * gh]
         if self.vega_obs:
             cols += [self.L * lv + hv, bk.cs * vh]
+        if self.extra_obs:  # [time left, vol] at t+1, as HedgingEnv with extra_obs
+            cols += [np.broadcast_to((1.0 - t1 / self.T)[:, None], S1.shape), vol1]
         obs1 = np.stack(cols, axis=-1)
         done = t1 == self.T
         obs1[done, :, 1:] = 0.0

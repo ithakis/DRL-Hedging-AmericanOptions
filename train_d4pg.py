@@ -253,13 +253,13 @@ def main(argv=None):
     kernel = None
     agent_cls, extra_kw = D4PGQR, {}
     if a.kernel_mx > 0:
-        assert a.process == "Heston" and not a.extra_obs, "kernel target: Heston, standard state only"
+        assert a.process == "Heston" and a.vega_obs, "kernel target: Heston with vega state"
         from torch_d4pg.agent_kernel import D4PGKernel
         from torch_d4pg.heston_kernel import HestonKernel, book_arrivals
         u = make_utils(argparse.Namespace(**{**vars(a), "spread": 0.0}), a.market_seed, a.n_train_paths)
         u.table_dir = a.table_dir
         _, _, c_book = book_arrivals(u)
-        kernel = HestonKernel(u, train_m, c_book, a.vega_obs, m_x=a.kernel_mx)
+        kernel = HestonKernel(u, train_m, c_book, a.vega_obs, m_x=a.kernel_mx, extra_obs=a.extra_obs)
         agent_cls, extra_kw = D4PGKernel, dict(n_nodes=kernel.M)
         print(f"kernel target: {kernel.M} nodes, liability scale {kernel.L}")
     agent = agent_cls(env.obs_dim, **extra_kw, obj_func=a.train_obj or a.obj_func, threshold=a.threshold, std_coef=a.std_coef, seed=a.seed,
