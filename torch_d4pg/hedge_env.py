@@ -18,6 +18,7 @@ import numpy as np
 
 class HedgingEnv:
     extra_obs = False  # class switch (batch B): append [time left t/T, volatility V_t] to the state
+    band = 0.0  # class switch: no option trade when |contracts| < band (the no-trade band of rule (b))
 
     def __init__(self, market, spread: float, vega_obs: bool):
         self.m = market
@@ -76,6 +77,8 @@ class HedgingEnv:
         a = np.clip(np.asarray(action, dtype=float).reshape(self.B), 0.0, 1.0)
         lo, hi = self.bounds()
         x = lo + a * (hi - lo)
+        if HedgingEnv.band > 0:
+            x = np.where(np.abs(x) < HedgingEnv.band, 0.0, x)
         self.n[:, t] = x
         cost = -np.abs(self.spread * x * b["h_price"][:, t, t])
         act = ~b["h_inactive"][:, t, :]

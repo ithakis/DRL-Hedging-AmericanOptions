@@ -132,6 +132,8 @@ def get_args(argv=None):
     g.add_argument("--train_obj", choices=["meanstd", "var", "cvar"], default=None,
                    help="objective of the actor/critic; default = --obj_func (selection always uses --obj_func)")
     g.add_argument("--tail_quantiles", action="store_true", help="critic quantile levels dense in the loss tail")
+    g.add_argument("--band", type=float, default=0.0, help="no option trade when |contracts| < band (env-level "
+                   "no-trade zone, e.g. the band w of rule (b))")
     g = ap.add_argument_group("batch D: expected critic target over the Heston transition density (off by default)")
     g.add_argument("--kernel_mx", type=int, default=0, help="Gauss-Hermite points per normal (nodes = mx^2); "
                    "0 = off. Forces 1-step targets (torch_d4pg/agent_kernel.py)")
@@ -146,6 +148,7 @@ def get_args(argv=None):
     g.add_argument("--export_test_market", action="store_true")
     a = ap.parse_args(argv)
     HedgingEnv.extra_obs = bool(a.extra_obs)
+    HedgingEnv.band = float(a.band)
     if a.vega_obs is None:
         a.vega_obs = a.process == "Heston"
     if a.n_train_paths is None:
