@@ -34,6 +34,8 @@ for V in $VARIANT; do VARIANT=$V; case $V in
   SBtail) EXTRA="--extra_obs --n_step 1 --n_envs 16 --train_episodes 20000 --val_every 500 --tail_quantiles" ;;
   SBband) EXTRA="--extra_obs --n_step 1 --n_envs 16 --train_episodes 20000 --val_every 500 --band BANDW" ;;
   KBband) EXTRA="--extra_obs --kernel_mx 3 --table_dir ../DRL-Hedging-retrain/pricing_tables --n_envs 16 --train_episodes 12000 --val_every 500 --band BANDW" ;;
+  SBresband) EXTRA="--extra_obs --n_step 1 --n_envs 16 --train_episodes 20000 --val_every 500 --residual_scale 0.5 --actor_freeze_episodes 1000 --band BANDW" ;;
+  KBresband) EXTRA="--extra_obs --kernel_mx 3 --table_dir ../DRL-Hedging-retrain/pricing_tables --n_envs 16 --train_episodes 12000 --val_every 500 --residual_scale 0.5 --actor_freeze_episodes 1000 --band BANDW" ;;
   SBres) EXTRA="--extra_obs --n_step 1 --n_envs 16 --train_episodes 20000 --val_every 500 --residual_scale 0.5 --actor_freeze_episodes 1000" ;;
   KBres) EXTRA="--extra_obs --kernel_mx 3 --table_dir ../DRL-Hedging-retrain/pricing_tables --n_envs 16 --train_episodes 12000 --val_every 500 --residual_scale 0.5 --actor_freeze_episodes 1000" ;;
   S1) EXTRA="--n_step 1 --n_envs 16 --train_episodes 20000 --val_every 500" ;;
@@ -46,7 +48,7 @@ for seed in $SEEDS; do for c in 0.005 0.01 0.02; do
   ARGS=$(python -c "from review.retrain.settings import train_args; print(' '.join(train_args('B', $c, $seed, out='$OUT')))")
   ARGS=${ARGS/--run_name HestonP_var_spread${c}_seed${seed}/--run_name $name}
   SCRIPT=train_d4pg.py; case $V in gate*) SCRIPT=train_gate.py;; esac
-  WR="--warm_rule $R"; case $V in A*|B*) WR="";; SBres|KBres) ;; L*|K*|S*) WR="";; esac
+  WR="--warm_rule $R"; case $V in A*|B*) WR="";; SBres|KBres|SBresband|KBresband) ;; L*|K*|S*) WR="";; esac
   W=${R##*,}
   echo "$name $SCRIPT $ARGS --market_dir $MARKETS $WR --n_train_paths 40000 ${EXTRA//BANDW/$W}"
 done; done; done | xargs -P "$P" -L 1 bash -c 'echo "$(date +%H:%M) start $0"; \
