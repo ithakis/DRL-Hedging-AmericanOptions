@@ -41,6 +41,9 @@ for V in $VARIANT; do VARIANT=$V; case $V in
   E1b) EXTRA="--extra_obs --kernel_mx 3 --table_dir ../DRL-Hedging-retrain/pricing_tables --n_envs 16 --train_episodes 12000 --val_every 500 --residual_scale 0.5 --actor_freeze_episodes 1000 --band BANDW --actor_sizes 64,64,64 --critic_sizes 64,64,64 --activation swish3 --lr 6e-4 --actor_lr 3e-4 --batch_size 128 --samples_per_insert 64" ;;
   # E2 (stability, on the anchor): eval EMA + Polyak + pre-squash linear noise
   E2) EXTRA="--extra_obs --kernel_mx 3 --table_dir ../DRL-Hedging-retrain/pricing_tables --n_envs 16 --train_episodes 12000 --val_every 500 --residual_scale 0.5 --actor_freeze_episodes 1000 --band BANDW --ema_decay 0.999 --tau 0.003 --noise_mode pre --sigma 1.0 --sigma_floor 0.2" ;;
+  # E3: stack E1a + E2, then band width 1.5x rule (b)'s w
+  E3a) EXTRA="--extra_obs --kernel_mx 3 --table_dir ../DRL-Hedging-retrain/pricing_tables --n_envs 16 --train_episodes 12000 --val_every 500 --residual_scale 0.5 --actor_freeze_episodes 1000 --actor_sizes 64,64,64 --critic_sizes 64,64,64 --activation swish3 --lr 6e-4 --actor_lr 3e-4 --ema_decay 0.999 --tau 0.003 --noise_mode pre --sigma 1.0 --sigma_floor 0.2 --band BANDW" ;;
+  E3b) EXTRA="--extra_obs --kernel_mx 3 --table_dir ../DRL-Hedging-retrain/pricing_tables --n_envs 16 --train_episodes 12000 --val_every 500 --residual_scale 0.5 --actor_freeze_episodes 1000 --actor_sizes 64,64,64 --critic_sizes 64,64,64 --activation swish3 --lr 6e-4 --actor_lr 3e-4 --ema_decay 0.999 --tau 0.003 --noise_mode pre --sigma 1.0 --sigma_floor 0.2 --band BANDX15" ;;
   SBres) EXTRA="--extra_obs --n_step 1 --n_envs 16 --train_episodes 20000 --val_every 500 --residual_scale 0.5 --actor_freeze_episodes 1000" ;;
   KBres) EXTRA="--extra_obs --kernel_mx 3 --table_dir ../DRL-Hedging-retrain/pricing_tables --n_envs 16 --train_episodes 12000 --val_every 500 --residual_scale 0.5 --actor_freeze_episodes 1000" ;;
   S1) EXTRA="--n_step 1 --n_envs 16 --train_episodes 20000 --val_every 500" ;;
@@ -54,7 +57,7 @@ for seed in $SEEDS; do for c in 0.005 0.01 0.02; do
   ARGS=${ARGS/--run_name HestonP_var_spread${c}_seed${seed}/--run_name $name}
   SCRIPT=train_d4pg.py; case $V in gate*) SCRIPT=train_gate.py;; esac
   WR="--warm_rule $R"; case $V in A*|B*) WR="";; SBres|KBres|SBresband|KBresband|E*) ;; L*|K*|S*) WR="";; esac
-  W=${R##*,}
-  echo "$name $SCRIPT $ARGS --market_dir $MARKETS $WR --n_train_paths 40000 ${EXTRA//BANDW/$W}"
+  W=${R##*,}; W15=$(python -c "print(round(1.5*$W, 3))"); EXTRA2=${EXTRA//BANDX15/$W15}
+  echo "$name $SCRIPT $ARGS --market_dir $MARKETS $WR --n_train_paths 40000 ${EXTRA2//BANDW/$W}"
 done; done; done | xargs -P "$P" -L 1 bash -c 'echo "$(date +%H:%M) start $0"; \
   python "$@" > "logs_torch/warmstart/_stdout/$0.log" 2>&1; echo "$(date +%H:%M) end $0 (exit $?)"'
