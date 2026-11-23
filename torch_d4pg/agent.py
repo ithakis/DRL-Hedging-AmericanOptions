@@ -71,12 +71,18 @@ class D4PGQR:
         self.learner_steps = 0
         self.last_losses = (np.nan, np.nan)
         self.train_actor = True  # False: critic-only learner steps (warm-up)
+        self.noise_mode = "post"  # "pre": Gaussian noise on the pre-tanh output (swing v34), scale self.sigma_now
+        self.sigma_now = sigma
 
     # ------------------------------------------------------------------ acting
     @torch.inference_mode()
     def policy(self, obs, noise=False):
         """obs (B, d) numpy -> canonical action u in [-1, 1], shape (B, 1)."""
-        u = self.actor(torch.as_tensor(obs, dtype=torch.float32))
+        x = torch.as_tensor(obs, dtype=torch.float32)
+        if noise and self.noise_mode == "pre":
+            z = self.actor.preact(x)
+            return torch.tanh(z + torch.randn_like(z) * self.sigma_now).numpy()
+        u = self.actor(x)
         if noise:
             eps = torch.randn_like(u) * self.cfg["sigma"]
             u = (u + eps.clamp(-1.0, 1.0)).clamp(-1.0, 1.0)  # acme ClippedGaussian + ClipToSpec

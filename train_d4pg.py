@@ -128,6 +128,10 @@ def get_args(argv=None):
     g.add_argument("--ema_decay", type=float, default=0.0, help="eval-only EMA of the actor weights (0 = off)")
     g.add_argument("--activation", choices=["acme", "silu", "swish3"], default="acme",
                    help="hidden layers: acme (LN-tanh then ELU, as PR #3) or LN + swish on every layer (swing v64/v65)")
+    g.add_argument("--noise_mode", choices=["post", "pre"], default="post",
+                   help="post: clipped Gaussian on the tanh action (acme); pre: on the pre-tanh output, "
+                        "linear decay --sigma -> --sigma_floor over training (swing v34 / Task 2)")
+    g.add_argument("--sigma_floor", type=float, default=0.26)
     g.add_argument("--n_envs", type=int, default=1, help="paths simulated in parallel per training episode batch")
     g = ap.add_argument_group("batch B (defaults = PR #3)")
     g.add_argument("--extra_obs", action="store_true", help="state + [time left t/T, volatility V_t]")
@@ -292,6 +296,9 @@ def main(argv=None):
     K = a.n_envs
     for ep in range(K - 1, a.train_episodes, K):  # ep = index of the last episode of this batch of K paths
         agent.train_actor = ep >= a.actor_freeze_episodes
+        if a.noise_mode == "pre":
+            agent.noise_mode = "pre"
+            agent.sigma_now = a.sigma + (a.sigma_floor - a.sigma) * min(1.0, ep / max(1, a.train_episodes))
         obs = env.reset(np.arange(ep - K + 1, ep + 1) % env.P)
         done, tot = False, np.zeros(K)
         paths = np.arange(ep - K + 1, ep + 1) % env.P
