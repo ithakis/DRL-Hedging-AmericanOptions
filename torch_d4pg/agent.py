@@ -34,7 +34,7 @@ class D4PGQR:
                  min_replay_size=1000, samples_per_insert=32.0, max_replay_size=1_000_000,
                  clip_norm=40.0, dqda_clip=1.0, obs_center=None, obs_scale=None, obs_clip=10.0,
                  actor_lr=None, residual_l2=0.0, tau=0.0, reward_scale=1.0, ema_decay=0.0, n_envs=1,
-                 tail_quantiles=False):
+                 tail_quantiles=False, activation="acme"):
         torch.manual_seed(seed)
         self.rng = np.random.default_rng(seed)
         self.cfg = dict(obs_dim=obs_dim, obj_func=obj_func, threshold=threshold, std_coef=std_coef, seed=seed,
@@ -46,10 +46,11 @@ class D4PGQR:
                         obs_center=None if obs_center is None else [float(x) for x in obs_center],
                         obs_scale=None if obs_scale is None else [float(x) for x in obs_scale],
                         obs_clip=obs_clip, actor_lr=actor_lr, residual_l2=residual_l2, tau=tau,
-                        reward_scale=reward_scale, ema_decay=ema_decay, n_envs=n_envs, tail_quantiles=tail_quantiles)
-        self.actor = Actor(obs_dim, actor_sizes, ObsNormalizer(obs_dim, obs_center, obs_scale, obs_clip))
+                        reward_scale=reward_scale, ema_decay=ema_decay, n_envs=n_envs, tail_quantiles=tail_quantiles,
+                        activation=activation)
+        self.actor = Actor(obs_dim, actor_sizes, ObsNormalizer(obs_dim, obs_center, obs_scale, obs_clip), activation)
         self.critic = QuantileCritic(obs_dim, critic_sizes, norm=ObsNormalizer(obs_dim, obs_center, obs_scale, obs_clip),
-                                     tail_quantiles=tail_quantiles)
+                                     tail_quantiles=tail_quantiles, activation=activation)
         self.actor_target = copy.deepcopy(self.actor)
         self.critic_target = copy.deepcopy(self.critic)
         for p in [*self.actor_target.parameters(), *self.critic_target.parameters()]:
@@ -187,7 +188,8 @@ class D4PGQR:
         ck = torch.load(path, map_location="cpu", weights_only=False)
         cfg = ck["cfg"]
         actor = Actor(cfg["obs_dim"], cfg["actor_sizes"],
-                      ObsNormalizer(cfg["obs_dim"], cfg.get("obs_center"), cfg.get("obs_scale"), cfg.get("obs_clip", 10.0)))
+                      ObsNormalizer(cfg["obs_dim"], cfg.get("obs_center"), cfg.get("obs_scale"), cfg.get("obs_clip", 10.0)),
+                      cfg.get("activation", "acme"))
         actor.load_state_dict(ck["actor"])
         return actor, cfg
 

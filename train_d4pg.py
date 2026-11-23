@@ -126,6 +126,8 @@ def get_args(argv=None):
     g.add_argument("--reward_scale", type=float, default=1.0, help="rewards fed to the critic are multiplied by this "
                    "(VaR/CVaR choices are scale-invariant)")
     g.add_argument("--ema_decay", type=float, default=0.0, help="eval-only EMA of the actor weights (0 = off)")
+    g.add_argument("--activation", choices=["acme", "silu", "swish3"], default="acme",
+                   help="hidden layers: acme (LN-tanh then ELU, as PR #3) or LN + swish on every layer (swing v64/v65)")
     g.add_argument("--n_envs", type=int, default=1, help="paths simulated in parallel per training episode batch")
     g = ap.add_argument_group("batch B (defaults = PR #3)")
     g.add_argument("--extra_obs", action="store_true", help="state + [time left t/T, volatility V_t]")
@@ -271,7 +273,7 @@ def main(argv=None):
                    min_replay_size=a.min_replay_size, samples_per_insert=a.samples_per_insert,
                    obs_center=center, obs_scale=scale, actor_lr=a.actor_lr, residual_l2=a.residual_l2,
                    tau=a.tau, reward_scale=a.reward_scale, ema_decay=a.ema_decay, n_envs=a.n_envs,
-                   tail_quantiles=a.tail_quantiles)
+                   tail_quantiles=a.tail_quantiles, activation=a.activation)
 
     rows, best = [], dict(score=np.inf)
     t_train, t_val, ep_rewards = 0.0, 0.0, []

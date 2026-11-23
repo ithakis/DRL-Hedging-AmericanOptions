@@ -36,6 +36,9 @@ for V in $VARIANT; do VARIANT=$V; case $V in
   KBband) EXTRA="--extra_obs --kernel_mx 3 --table_dir ../DRL-Hedging-retrain/pricing_tables --n_envs 16 --train_episodes 12000 --val_every 500 --band BANDW" ;;
   SBresband) EXTRA="--extra_obs --n_step 1 --n_envs 16 --train_episodes 20000 --val_every 500 --residual_scale 0.5 --actor_freeze_episodes 1000 --band BANDW" ;;
   KBresband) EXTRA="--extra_obs --kernel_mx 3 --table_dir ../DRL-Hedging-retrain/pricing_tables --n_envs 16 --train_episodes 12000 --val_every 500 --residual_scale 0.5 --actor_freeze_episodes 1000 --band BANDW" ;;
+  # batch E (on KBresband = anchor): E1 small swish nets + more updates + critic LR 2x
+  E1a) EXTRA="--extra_obs --kernel_mx 3 --table_dir ../DRL-Hedging-retrain/pricing_tables --n_envs 16 --train_episodes 12000 --val_every 500 --residual_scale 0.5 --actor_freeze_episodes 1000 --band BANDW --actor_sizes 64,64,64 --critic_sizes 64,64,64 --activation swish3 --lr 6e-4 --actor_lr 3e-4" ;;
+  E1b) EXTRA="--extra_obs --kernel_mx 3 --table_dir ../DRL-Hedging-retrain/pricing_tables --n_envs 16 --train_episodes 12000 --val_every 500 --residual_scale 0.5 --actor_freeze_episodes 1000 --band BANDW --actor_sizes 64,64,64 --critic_sizes 64,64,64 --activation swish3 --lr 6e-4 --actor_lr 3e-4 --batch_size 128 --samples_per_insert 64" ;;
   SBres) EXTRA="--extra_obs --n_step 1 --n_envs 16 --train_episodes 20000 --val_every 500 --residual_scale 0.5 --actor_freeze_episodes 1000" ;;
   KBres) EXTRA="--extra_obs --kernel_mx 3 --table_dir ../DRL-Hedging-retrain/pricing_tables --n_envs 16 --train_episodes 12000 --val_every 500 --residual_scale 0.5 --actor_freeze_episodes 1000" ;;
   S1) EXTRA="--n_step 1 --n_envs 16 --train_episodes 20000 --val_every 500" ;;
@@ -48,7 +51,7 @@ for seed in $SEEDS; do for c in 0.005 0.01 0.02; do
   ARGS=$(python -c "from review.retrain.settings import train_args; print(' '.join(train_args('B', $c, $seed, out='$OUT')))")
   ARGS=${ARGS/--run_name HestonP_var_spread${c}_seed${seed}/--run_name $name}
   SCRIPT=train_d4pg.py; case $V in gate*) SCRIPT=train_gate.py;; esac
-  WR="--warm_rule $R"; case $V in A*|B*) WR="";; SBres|KBres|SBresband|KBresband) ;; L*|K*|S*) WR="";; esac
+  WR="--warm_rule $R"; case $V in A*|B*) WR="";; SBres|KBres|SBresband|KBresband|E*) ;; L*|K*|S*) WR="";; esac
   W=${R##*,}
   echo "$name $SCRIPT $ARGS --market_dir $MARKETS $WR --n_train_paths 40000 ${EXTRA//BANDW/$W}"
 done; done; done | xargs -P "$P" -L 1 bash -c 'echo "$(date +%H:%M) start $0"; \
