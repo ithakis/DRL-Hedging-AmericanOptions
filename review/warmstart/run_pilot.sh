@@ -51,6 +51,9 @@ for V in $VARIANT; do VARIANT=$V; case $V in
   F5) EXTRA="--extra_obs --kernel_mx 3 --table_dir ../DRL-Hedging-retrain/pricing_tables --n_envs 16 --train_episodes 12000 --val_every 500 --residual_scale 0.5 --actor_freeze_episodes 1000 --actor_sizes 64,64,64 --critic_sizes 64,64,64 --activation swish3 --lr 6e-4 --actor_lr 3e-4 --ema_decay 0.999 --tau 0.003 --noise_mode pre --sigma 1.0 --sigma_floor 0.2 --band BANDW --dqda_clip 10" ;;
   F4) EXTRA="--extra_obs --kernel_mx 3 --table_dir ../DRL-Hedging-retrain/pricing_tables --n_envs 16 --train_episodes 12000 --val_every 500 --residual_scale 0.5 --actor_freeze_episodes 1000 --actor_sizes 64,64,64 --critic_sizes 64,64,64 --activation swish3 --lr 6e-4 --actor_lr 3e-4 --ema_decay 0.999 --tau 0.003 --noise_mode pre --sigma 0.4 --sigma_floor 0.1 --band BANDW" ;;
   F6) EXTRA="--extra_obs --kernel_mx 3 --table_dir ../DRL-Hedging-retrain/pricing_tables --n_envs 16 --train_episodes 12000 --val_every 500 --residual_scale 0.2 --actor_freeze_episodes 1000 --actor_sizes 64,64,64 --critic_sizes 64,64,64 --activation swish3 --lr 6e-4 --actor_lr 3e-4 --ema_decay 0.999 --tau 0.003 --noise_mode pre --sigma 1.0 --sigma_floor 0.2 --band BANDW" ;;
+  # pre-commitment objective (Rockafellar-Uryasev): b = rule (b) validation VaR95 (P1) or 0.75x (P2)
+  P1) EXTRA="--extra_obs --kernel_mx 3 --table_dir ../DRL-Hedging-retrain/pricing_tables --n_envs 16 --train_episodes 12000 --val_every 500 --residual_scale 0.5 --actor_freeze_episodes 1000 --actor_sizes 64,64,64 --critic_sizes 64,64,64 --activation swish3 --lr 6e-4 --actor_lr 3e-4 --ema_decay 0.999 --tau 0.003 --noise_mode pre --sigma 1.0 --sigma_floor 0.2 --band BANDW --train_obj mean --precommit_b PCB" ;;
+  P2) EXTRA="--extra_obs --kernel_mx 3 --table_dir ../DRL-Hedging-retrain/pricing_tables --n_envs 16 --train_episodes 12000 --val_every 500 --residual_scale 0.5 --actor_freeze_episodes 1000 --actor_sizes 64,64,64 --critic_sizes 64,64,64 --activation swish3 --lr 6e-4 --actor_lr 3e-4 --ema_decay 0.999 --tau 0.003 --noise_mode pre --sigma 1.0 --sigma_floor 0.2 --band BANDW --train_obj mean --precommit_b PCB75" ;;
   SBres) EXTRA="--extra_obs --n_step 1 --n_envs 16 --train_episodes 20000 --val_every 500 --residual_scale 0.5 --actor_freeze_episodes 1000" ;;
   KBres) EXTRA="--extra_obs --kernel_mx 3 --table_dir ../DRL-Hedging-retrain/pricing_tables --n_envs 16 --train_episodes 12000 --val_every 500 --residual_scale 0.5 --actor_freeze_episodes 1000" ;;
   S1) EXTRA="--n_step 1 --n_envs 16 --train_episodes 20000 --val_every 500" ;;
@@ -63,7 +66,9 @@ for seed in $SEEDS; do for c in 0.005 0.01 0.02; do
   ARGS=$(python -c "from review.retrain.settings import train_args; print(' '.join(train_args('B', $c, $seed, out='$OUT')))")
   ARGS=${ARGS/--run_name HestonP_var_spread${c}_seed${seed}/--run_name $name}
   SCRIPT=train_d4pg.py; case $V in gate*) SCRIPT=train_gate.py;; esac
-  WR="--warm_rule $R"; case $V in A*|B*) WR="";; SBres|KBres|SBresband|KBresband|E*|F*) ;; L*|K*|S*) WR="";; esac
+  WR="--warm_rule $R"; case $V in A*|B*) WR="";; SBres|KBres|SBresband|KBresband|E*|F*|P*) ;; L*|K*|S*) WR="";; esac
+  case $c in 0.005) PCB=24.59;; 0.01) PCB=27.87;; 0.02) PCB=32.80;; esac
+  PCB75=$(python -c "print(round(0.75*$PCB, 2))"); EXTRA=${EXTRA//PCB75/$PCB75}; EXTRA=${EXTRA//PCB/$PCB}
   W=${R##*,}; W15=$(python -c "print(round(1.5*$W, 3))"); EXTRA2=${EXTRA//BANDX15/$W15}
   echo "$name $SCRIPT $ARGS --market_dir $MARKETS $WR --n_train_paths 40000 ${EXTRA2//BANDW/$W}"
 done; done; done | xargs -P "$P" -L 1 bash -c 'echo "$(date +%H:%M) start $0"; \

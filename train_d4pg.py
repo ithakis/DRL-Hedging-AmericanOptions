@@ -138,10 +138,14 @@ def get_args(argv=None):
                    "quantile levels within +-var_smooth of 5%% (0 = one quantile)")
     g.add_argument("--dqda_clip", type=float, default=1.0)
     g.add_argument("--rule_obs", action="store_true", help="state + [n_G, n_V] (the rule's inputs)")
+    g.add_argument("--precommit_b", type=float, default=None,
+                   help="pre-commitment objective (Rockafellar-Uryasev / Bauerle-Ott): state + accumulated P&L W_t, "
+                        "reward shaped to g(W_{t+1}) - g(W_t) with g(W) = min(W + b, 0), so the return is "
+                        "-(episode loss - b)^+; the critic objective is its mean (use --train_obj mean)")
     g.add_argument("--n_envs", type=int, default=1, help="paths simulated in parallel per training episode batch")
     g = ap.add_argument_group("batch B (defaults = PR #3)")
     g.add_argument("--extra_obs", action="store_true", help="state + [time left t/T, volatility V_t]")
-    g.add_argument("--train_obj", choices=["meanstd", "var", "cvar"], default=None,
+    g.add_argument("--train_obj", choices=["meanstd", "var", "cvar", "mean"], default=None,
                    help="objective of the actor/critic; default = --obj_func (selection always uses --obj_func)")
     g.add_argument("--tail_quantiles", action="store_true", help="critic quantile levels dense in the loss tail")
     g.add_argument("--band", type=float, default=0.0, help="no option trade when |contracts| < band (env-level "
@@ -162,6 +166,7 @@ def get_args(argv=None):
     HedgingEnv.extra_obs = bool(a.extra_obs)
     HedgingEnv.band = float(a.band)
     HedgingEnv.rule_obs = bool(a.rule_obs)
+    HedgingEnv.pnl_obs = a.precommit_b is not None
     if a.vega_obs is None:
         a.vega_obs = a.process == "Heston"
     if a.n_train_paths is None:
@@ -302,6 +307,7 @@ def main(argv=None):
               f"mean {s['mean_pnl']:.2f}, action mean {acts.mean():.3f}", flush=True)
     tic = time.time()
     K = a.n_envs
+    gpc = (lambda W: np.minimum(W + a.precommit_b, 0.0)) if a.precommit_b is not None else None
     for ep in range(K - 1, a.train_episodes, K):  # ep = index of the last episode of this batch of K paths
         agent.train_actor = ep >= a.actor_freeze_episodes
         if a.noise_mode == "pre":
@@ -313,14 +319,20 @@ def main(argv=None):
         while not done:
             u = agent.policy(obs, noise=True)
             t_now = env.t
+            W0 = env.W.copy()
             next_obs, r, done, x = env.step(agent.to_env_action(u))
+            r_train = r if a.precommit_b is None else gpc(W0 + r) - gpc(W0)
             if kernel is not None:
                 cost = -np.abs(a.spread * x * env.b["h_price"][:, t_now, t_now])
                 rk, ok, _, wk = kernel.transition(paths, np.full(K, t_now), env.n.copy(), cost)
+                if a.precommit_b is not None:
+                    W1 = W0[:, None] + rk
+                    ok = np.concatenate([ok, np.where(done, 0.0, W1)[..., None]], axis=-1)
+                    rk = gpc(W1) - gpc(W0)[:, None]
                 agent.observe_batch(obs, u, rk, ok, next_obs, done, wk)
             else:
                 for i in range(K):
-                    agent.observe(obs[i], u[i], r[i], next_obs[i], done)
+                    agent.observe(obs[i], u[i], r_train[i], next_obs[i], done)
             obs, tot = next_obs, tot + r
         ep_rewards.extend(tot.tolist())
         if (ep + 1) % a.val_every < K or ep + 1 >= a.train_episodes:

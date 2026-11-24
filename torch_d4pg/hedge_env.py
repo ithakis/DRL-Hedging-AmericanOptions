@@ -28,6 +28,7 @@ class HedgingEnv:
     extra_obs = False  # class switch (batch B): append [time left t/T, volatility V_t] to the state
     band = 0.0  # class switch: no option trade when |contracts| < band (the no-trade band of rule (b))
     rule_obs = False  # class switch: append n_G = -Gamma/gamma^h and n_V = -Vega/vega^h (the rule's inputs)
+    pnl_obs = False  # class switch: append the accumulated episode P&L W_t (last column; pre-commitment objective)
 
     def __init__(self, market, spread: float, vega_obs: bool):
         self.m = market
@@ -35,7 +36,8 @@ class HedgingEnv:
         self.vega_obs = bool(vega_obs)
         self.P, self.T1 = market["S"].shape
         self.T = self.T1 - 1  # number of hedging steps per episode
-        self.obs_dim = (5 if vega_obs else 3) + (2 if HedgingEnv.extra_obs else 0) + (2 if HedgingEnv.rule_obs else 0)
+        self.obs_dim = ((5 if vega_obs else 3) + (2 if HedgingEnv.extra_obs else 0) + (2 if HedgingEnv.rule_obs else 0)
+                        + (1 if HedgingEnv.pnl_obs else 0))
 
     # ------------------------------------------------------------------
     def reset(self, idx):
@@ -47,6 +49,7 @@ class HedgingEnv:
         self.n = np.zeros((self.B, self.T1))
         self.t = 0
         self.pos_prev = np.zeros(self.B)
+        self.W = np.zeros(self.B)  # accumulated P&L of the episode so far
         return self._obs()
 
     def _port(self, t):
@@ -66,6 +69,8 @@ class HedgingEnv:
             cols += [np.full(self.B, 1.0 - t / self.T), b["V"][:, t]]
         if HedgingEnv.rule_obs:
             cols += list(neutral_amounts(cols[1], cols[2], cols[3], cols[4]))
+        if HedgingEnv.pnl_obs:
+            cols += [self.W.copy()]
         obs = np.stack(cols, axis=1)
         if t == self.T:
             obs[:, 1:] = 0.0
@@ -100,6 +105,7 @@ class HedgingEnv:
         pnl = pnl + pos * (b["S"][:, t + 1] - b["S"][:, t])
         self.t = t + 1
         done = self.t == self.T
+        self.W = self.W + cost + pnl
         return self._obs(), cost + pnl, done, x
 
 

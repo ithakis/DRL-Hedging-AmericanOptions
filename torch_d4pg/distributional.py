@@ -109,7 +109,7 @@ class RiskObjective:
         if smooth > 0:  # triangular kernel of half-width `smooth` around the VaR level (denser actor gradient)
             w = torch.clamp(1.0 - (quantiles - q_level).abs() / smooth, min=0.0) * probs
             self.var_w = w / w.sum()
-        if name not in ("meanstd", "var", "cvar"):
+        if name not in ("meanstd", "var", "cvar", "mean"):
             raise ValueError(f"unknown objective {name}")
 
     def __call__(self, z):
@@ -119,4 +119,6 @@ class RiskObjective:
             return mean - self.std_coef * var.sqrt()
         if self.name == "var":
             return (z * self.var_w).sum(-1)
+        if self.name == "mean":
+            return z.mean(-1)
         return (z * self.probs * self.cvar_mask).sum(-1)
