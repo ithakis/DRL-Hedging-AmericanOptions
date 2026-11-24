@@ -88,7 +88,7 @@ def quantile_huber_loss_reference(z_pred, quantiles, r, d, z_next, k: float = 1.
 
 class RiskObjective:
     def __init__(self, name: str, quantiles: torch.Tensor, probs: torch.Tensor, threshold: float = 0.95,
-                 std_coef: float = 1.645):
+                 std_coef: float = 1.645, smooth: float = 0.0):
         self.name = name
         self.std_coef = std_coef
         self.probs = probs
@@ -106,6 +106,9 @@ class RiskObjective:
             lam = float((q_level - quantiles[j - 1]) / (quantiles[j] - quantiles[j - 1]))
             self.var_w = torch.zeros_like(quantiles)
             self.var_w[j - 1], self.var_w[j] = 1 - lam, lam
+        if smooth > 0:  # triangular kernel of half-width `smooth` around the VaR level (denser actor gradient)
+            w = torch.clamp(1.0 - (quantiles - q_level).abs() / smooth, min=0.0) * probs
+            self.var_w = w / w.sum()
         if name not in ("meanstd", "var", "cvar"):
             raise ValueError(f"unknown objective {name}")
 

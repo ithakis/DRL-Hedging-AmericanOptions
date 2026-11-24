@@ -132,6 +132,12 @@ def get_args(argv=None):
                    help="post: clipped Gaussian on the tanh action (acme); pre: on the pre-tanh output, "
                         "linear decay --sigma -> --sigma_floor over training (swing v34 / Task 2)")
     g.add_argument("--sigma_floor", type=float, default=0.26)
+    g.add_argument("--actor_on_current", action="store_true", help="actor update at the sampled state (swing), "
+                   "not at the next observation (acme)")
+    g.add_argument("--var_smooth", type=float, default=0.0, help="actor VaR objective: triangular weights over "
+                   "quantile levels within +-var_smooth of 5%% (0 = one quantile)")
+    g.add_argument("--dqda_clip", type=float, default=1.0)
+    g.add_argument("--rule_obs", action="store_true", help="state + [n_G, n_V] (the rule's inputs)")
     g.add_argument("--n_envs", type=int, default=1, help="paths simulated in parallel per training episode batch")
     g = ap.add_argument_group("batch B (defaults = PR #3)")
     g.add_argument("--extra_obs", action="store_true", help="state + [time left t/T, volatility V_t]")
@@ -155,6 +161,7 @@ def get_args(argv=None):
     a = ap.parse_args(argv)
     HedgingEnv.extra_obs = bool(a.extra_obs)
     HedgingEnv.band = float(a.band)
+    HedgingEnv.rule_obs = bool(a.rule_obs)
     if a.vega_obs is None:
         a.vega_obs = a.process == "Heston"
     if a.n_train_paths is None:
@@ -277,7 +284,8 @@ def main(argv=None):
                    min_replay_size=a.min_replay_size, samples_per_insert=a.samples_per_insert,
                    obs_center=center, obs_scale=scale, actor_lr=a.actor_lr, residual_l2=a.residual_l2,
                    tau=a.tau, reward_scale=a.reward_scale, ema_decay=a.ema_decay, n_envs=a.n_envs,
-                   tail_quantiles=a.tail_quantiles, activation=a.activation)
+                   tail_quantiles=a.tail_quantiles, activation=a.activation,
+                   actor_on_current=a.actor_on_current, var_smooth=a.var_smooth, dqda_clip=a.dqda_clip)
 
     rows, best = [], dict(score=np.inf)
     t_train, t_val, ep_rewards = 0.0, 0.0, []

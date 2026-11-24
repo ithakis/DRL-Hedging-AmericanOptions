@@ -92,7 +92,7 @@ class D4PGKernel(D4PGQR):
             self.last_losses = (float(critic_loss.detach()), np.nan)
             self._after_step()
             return
-        o_t = o1_real
+        o_t = o if self.cfg["actor_on_current"] else o1_real
         act = self.actor(o_t)
         a_det = act.detach().requires_grad_(True)
         q = self.objective(self.critic(o_t, a_det))

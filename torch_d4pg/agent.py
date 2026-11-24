@@ -34,7 +34,7 @@ class D4PGQR:
                  min_replay_size=1000, samples_per_insert=32.0, max_replay_size=1_000_000,
                  clip_norm=40.0, dqda_clip=1.0, obs_center=None, obs_scale=None, obs_clip=10.0,
                  actor_lr=None, residual_l2=0.0, tau=0.0, reward_scale=1.0, ema_decay=0.0, n_envs=1,
-                 tail_quantiles=False, activation="acme"):
+                 tail_quantiles=False, activation="acme", actor_on_current=False, var_smooth=0.0):
         torch.manual_seed(seed)
         self.rng = np.random.default_rng(seed)
         self.cfg = dict(obs_dim=obs_dim, obj_func=obj_func, threshold=threshold, std_coef=std_coef, seed=seed,
@@ -47,7 +47,7 @@ class D4PGQR:
                         obs_scale=None if obs_scale is None else [float(x) for x in obs_scale],
                         obs_clip=obs_clip, actor_lr=actor_lr, residual_l2=residual_l2, tau=tau,
                         reward_scale=reward_scale, ema_decay=ema_decay, n_envs=n_envs, tail_quantiles=tail_quantiles,
-                        activation=activation)
+                        activation=activation, actor_on_current=actor_on_current, var_smooth=var_smooth)
         self.actor = Actor(obs_dim, actor_sizes, ObsNormalizer(obs_dim, obs_center, obs_scale, obs_clip), activation)
         self.critic = QuantileCritic(obs_dim, critic_sizes, norm=ObsNormalizer(obs_dim, obs_center, obs_scale, obs_clip),
                                      tail_quantiles=tail_quantiles, activation=activation)
@@ -57,7 +57,8 @@ class D4PGQR:
             p.requires_grad_(False)
         self.actor_opt = torch.optim.Adam(self.actor.parameters(), lr=actor_lr or lr, eps=1e-8)
         self.critic_opt = torch.optim.Adam(self.critic.parameters(), lr=lr, eps=1e-8)
-        self.objective = RiskObjective(obj_func, self.critic.quantiles, self.critic.probs, threshold, std_coef)
+        self.objective = RiskObjective(obj_func, self.critic.quantiles, self.critic.probs, threshold, std_coef,
+                                       smooth=var_smooth)
         # eval-only EMA of the actor weights (swing Task 2); self.actor_eval is what validation/test use
         self.actor_ema = copy.deepcopy(self.actor) if ema_decay > 0 else None
         if self.actor_ema is not None:
@@ -152,10 +153,12 @@ class D4PGQR:
             if self.actor_ema is not None:  # actor frozen: keep the EMA equal to it
                 self.actor_ema.load_state_dict(self.actor.state_dict())
             return
-        # actor (trfl/acme dpg loss with dqda clipping)
-        a = self.actor(o_t)
+        # actor (trfl/acme dpg loss with dqda clipping); acme evaluates it at the next observation,
+        # actor_on_current uses the sampled state itself (swing) so t = 0 is trained and terminal states are not
+        o_a = o_tm1 if self.cfg["actor_on_current"] else o_t
+        a = self.actor(o_a)
         a_det = a.detach().requires_grad_(True)
-        q = self.objective(self.critic(o_t, a_det))
+        q = self.objective(self.critic(o_a, a_det))
         dqda = torch.autograd.grad(q.sum(), a_det)[0]
         c = self.cfg["dqda_clip"]
         dqda = dqda.clamp(-c, c)

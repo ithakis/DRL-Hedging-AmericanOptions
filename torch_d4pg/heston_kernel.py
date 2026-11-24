@@ -233,6 +233,9 @@ class HestonKernel:
             cols += [self.L * lv + hv, bk.cs * vh]
         if self.extra_obs:  # [time left, vol] at t+1, as HedgingEnv with extra_obs
             cols += [np.broadcast_to((1.0 - t1 / self.T)[:, None], S1.shape), vol1]
+        from .hedge_env import HedgingEnv, neutral_amounts
+        if HedgingEnv.rule_obs:
+            cols += list(neutral_amounts(cols[1], cols[2], cols[3], cols[4]))
         obs1 = np.stack(cols, axis=-1)
         done = t1 == self.T
         obs1[done, :, 1:] = 0.0

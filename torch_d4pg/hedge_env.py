@@ -16,9 +16,18 @@ tests/test_torch_d4pg.py checks it against MainPortfolio.step on the same market
 import numpy as np
 
 
+def neutral_amounts(G, gh, V, vh):
+    """n_G = -G/gamma^h, n_V = -V/vega^h (contracts that make gamma / vega zero), finite."""
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ng = np.clip(np.nan_to_num(-G / gh, nan=0.0, posinf=0.0, neginf=0.0), -1e3, 1e3)
+        nv = np.clip(np.nan_to_num(-V / vh, nan=0.0, posinf=0.0, neginf=0.0), -1e3, 1e3)
+    return ng, nv
+
+
 class HedgingEnv:
     extra_obs = False  # class switch (batch B): append [time left t/T, volatility V_t] to the state
     band = 0.0  # class switch: no option trade when |contracts| < band (the no-trade band of rule (b))
+    rule_obs = False  # class switch: append n_G = -Gamma/gamma^h and n_V = -Vega/vega^h (the rule's inputs)
 
     def __init__(self, market, spread: float, vega_obs: bool):
         self.m = market
@@ -26,7 +35,7 @@ class HedgingEnv:
         self.vega_obs = bool(vega_obs)
         self.P, self.T1 = market["S"].shape
         self.T = self.T1 - 1  # number of hedging steps per episode
-        self.obs_dim = (5 if vega_obs else 3) + (2 if HedgingEnv.extra_obs else 0)
+        self.obs_dim = (5 if vega_obs else 3) + (2 if HedgingEnv.extra_obs else 0) + (2 if HedgingEnv.rule_obs else 0)
 
     # ------------------------------------------------------------------
     def reset(self, idx):
@@ -55,6 +64,8 @@ class HedgingEnv:
             cols += [V, b["h_vega"][:, t, t]]
         if HedgingEnv.extra_obs:
             cols += [np.full(self.B, 1.0 - t / self.T), b["V"][:, t]]
+        if HedgingEnv.rule_obs:
+            cols += list(neutral_amounts(cols[1], cols[2], cols[3], cols[4]))
         obs = np.stack(cols, axis=1)
         if t == self.T:
             obs[:, 1:] = 0.0
