@@ -68,8 +68,8 @@ for seed in $SEEDS; do for c in 0.005 0.01 0.02; do
   SCRIPT=train_d4pg.py; case $V in gate*) SCRIPT=train_gate.py;; esac
   WR="--warm_rule $R"; case $V in A*|B*) WR="";; SBres|KBres|SBresband|KBresband|E*|F*|P*) ;; L*|K*|S*) WR="";; esac
   case $c in 0.005) PCB=24.59;; 0.01) PCB=27.87;; 0.02) PCB=32.80;; esac
-  PCB75=$(python -c "print(round(0.75*$PCB, 2))"); EXTRA=${EXTRA//PCB75/$PCB75}; EXTRA=${EXTRA//PCB/$PCB}
-  W=${R##*,}; W15=$(python -c "print(round(1.5*$W, 3))"); EXTRA2=${EXTRA//BANDX15/$W15}
+  PCB75=$(python -c "print(round(0.75*$PCB, 2))"); EXTRAc=${EXTRA//PCB75/$PCB75}; EXTRAc=${EXTRAc//PCB/$PCB}
+  W=${R##*,}; W15=$(python -c "print(round(1.5*$W, 3))"); EXTRA2=${EXTRAc//BANDX15/$W15}
   echo "$name $SCRIPT $ARGS --market_dir $MARKETS $WR --n_train_paths 40000 ${EXTRA2//BANDW/$W}"
 done; done; done | xargs -P "$P" -L 1 bash -c 'echo "$(date +%H:%M) start $0"; \
   python "$@" > "logs_torch/warmstart/_stdout/$0.log" 2>&1; echo "$(date +%H:%M) end $0 (exit $?)"'
