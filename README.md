@@ -37,11 +37,27 @@ If you’re reading the paper, this README maps concepts to code and gives step-
   - `distributional.py` — Distributional heads (C51/QR/IQN), risk metrics, quantile losses.
   - `learning.py` — Learner tying objectives (mean-std/VaR/CVaR) to critic types.
 - Experiment scripts: `(EXP *) *.sh`, `run.sh`, `Robustness Testing.sh` — orchestration examples for batch runs.
-- `requirements.txt`, `environment.yaml` — dependencies (pip and Conda). QuantLib is provided via Conda.
+- `pyproject.toml`, `uv.lock` — dependencies of the PyTorch revision pipeline (Python 3.14, managed with uv).
+- `requirements.txt`, `environment.yaml` — dependencies of the original Acme/TensorFlow pipeline (legacy, Linux, Python 3.9).
 
 ## Environment setup
 
-QuantLib is required for Heston American pricing; we recommend Conda on macOS.
+**Revision pipeline (PyTorch, `train_d4pg.py`, `review/`).** Python 3.14, managed with [uv](https://docs.astral.sh/uv/).
+All dependencies (torch, numba, QuantLib, numpy, scipy, pandas, ...) have wheels for macOS arm64, Linux and Windows.
+
+```bash
+uv sync                                  # creates .venv from uv.lock (exact versions)
+uv run pytest tests                      # quick check
+PYTHONPATH=. uv run python train_d4pg.py --help
+```
+
+`uv run python ...` can replace `python ...` in every command below, or activate `.venv` once.
+`requirements-torch.txt` is the same pinned set for plain pip (`uv export` output).
+
+**Original pipeline (Acme / TensorFlow, `run.py`, `agent/`; legacy, Linux only).** It needs Python 3.9 and
+the pinned versions below; it is kept only for reference.
+
+QuantLib is required for Heston American pricing; we recommend Conda.
 
 - Conda (recommended)
   - Create the environment from `environment.yaml` to get QuantLib, TensorFlow 2.8, Acme, Sonnet, and the scientific stack with pinned versions.
@@ -105,7 +121,7 @@ between no hedge and the gamma-/vega-neutral amount, reward = P&L minus option c
 n-step 5, discount 1, Adam 1e-4, noise 0.3, hard target update every 100 steps, gradient clip 40,
 actor 256-256-256, critic 512-512-256 (all flags, see `--help`).
 
-Install (conda env or pip): `pip install -r requirements-torch.txt` (torch, numba, QuantLib, numpy, scipy, pandas, ...).
+Install: `uv sync` (Python 3.14, see *Environment setup*), or `pip install -r requirements-torch.txt`.
 
 **Paths.** Three disjoint path sets: training paths (`--market_seed 1234`, shared by all agent seeds),
 validation (`--val_seed 2025`, 8,192 paths) and test (`--test_seed 654`, 8,192 paths, the same as the rule
