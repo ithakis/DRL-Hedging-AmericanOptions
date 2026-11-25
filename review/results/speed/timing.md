@@ -47,3 +47,16 @@ Selected episode unchanged (1008).
 
 Profile (`profile_fastloss_*.txt`): the sorted loss kernel is still the largest item, 99 s of the profiled run
 (13 ms per call), then sigmoid 9 s, layer_norm 8 s, table lookup 13 s, backward 6 s.
+
+## Update 2: one weighted sorted row per transition (commit ad60894)
+
+Equivalence test `[loss mixture]`: rel diff loss 0, grad 1.9e-07; 256 x 9 nodes: 39.3 ms (original) vs 13.0 ms -> 3.0x.
+
+| Code | s / 1,000 episodes | train s | env | kernel | learn | validation |
+|---|---|---|---|---|---|---|
+| speed branch, sorted loss (f25968a) | 78.8 | 157.5 | 0.8 | 15.6 | 140.2 | 3.0 |
+| speed branch, mixture loss (ad60894) | 68.1 | 136.2 | 0.8 | 15.7 | 119.2 | 2.5 |
+
+2.6x faster than base (177.4). Validation VaR95 at 512 / 1008 / 1504 / 2000: 32.80 / 32.83 / 33.93 / 33.65
+(base 33.64 at 2000), selected episode 1008. Profile: loss kernel 77 s of 144 s (10 ms per call), sigmoid 9 s,
+layer_norm 8 s, table lookup 13 s, backward 4.5 s.
