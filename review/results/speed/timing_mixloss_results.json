@@ -1,0 +1,18 @@
+{
+  "run_name": "timing_mixloss",
+  "selected_episode": 1008,
+  "val_score": 32.83200671068003,
+  "seconds_market": 0.04585099220275879,
+  "seconds_train": 136.20864367485046,
+  "seconds_validation": 2.4976143836975098,
+  "seconds_per_1000_episodes": 68.10432183742523,
+  "learner_steps": 7376,
+  "torch_threads": 1,
+  "cpu_count": 8,
+  "timing_seconds": {
+    "env": 0.8,
+    "kernel": 15.67,
+    "learn": 119.16,
+    "validation": 2.5
+  }
+}

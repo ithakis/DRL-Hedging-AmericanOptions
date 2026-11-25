@@ -11,7 +11,8 @@ import numpy as np
 import torch
 
 from .agent import D4PGQR
-from .distributional import quantile_huber_loss
+from . import distributional as _dist
+from .distributional import quantile_huber_loss, quantile_huber_loss_mixture
 
 
 class KernelReplay:
@@ -80,10 +81,14 @@ class D4PGKernel(D4PGQR):
             flat = o1.reshape(B * M, D)
             z_next = self.critic_target(flat, self.actor_target(flat))           # (B*M, N)
         z = self.critic(o, a)                                                   # (B, N)
-        zr = z.repeat_interleave(M, dim=0)
-        disc = (1.0 - d).repeat_interleave(M).unsqueeze(-1)
-        loss_bm = quantile_huber_loss(zr, self.critic.quantiles, r.reshape(B * M, 1), disc, z_next).reshape(B, M)
-        critic_loss = (loss_bm * w).sum(1).mean()
+        if _dist.FAST_LOSS:  # all M node targets of a transition in one sorted row (same loss, no repeat)
+            critic_loss = quantile_huber_loss_mixture(z, self.critic.quantiles, r, 1.0 - d,
+                                                      z_next.reshape(B, M, -1), w).mean()
+        else:
+            zr = z.repeat_interleave(M, dim=0)
+            disc = (1.0 - d).repeat_interleave(M).unsqueeze(-1)
+            loss_bm = quantile_huber_loss(zr, self.critic.quantiles, r.reshape(B * M, 1), disc, z_next).reshape(B, M)
+            critic_loss = (loss_bm * w).sum(1).mean()
         self.critic_opt.zero_grad(set_to_none=True)
         critic_loss.backward()
         torch.nn.utils.clip_grad_norm_(self.critic.parameters(), self.cfg["clip_norm"])

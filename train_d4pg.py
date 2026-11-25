@@ -71,7 +71,7 @@ def get_args(argv=None):
     g.add_argument("--time_to_simulate", type=int, default=30)
     g.add_argument("--TradingDaysPerYear", type=int, default=252)
     g.add_argument("--numerical_accuracy", default="low")
-    g.add_argument("--pricing_backend", default="table", help="Heston only: table (v2) or quantlib")
+    g.add_argument("--pricing_backend", default="table", help="Heston only: table (v2, QuantLib table), quantlib, adi_qldays (ADI table, QuantLib day count) or adi_trading (ADI table, maturity tau/252 like the paths)")
     g.add_argument("--n_jobs", type=int, default=-1)
     g.add_argument("--market_dir", default="markets", help="cache of built markets (.npy, shared by runs)")
 
@@ -154,6 +154,15 @@ def get_args(argv=None):
     g.add_argument("--kernel_mx", type=int, default=0, help="Gauss-Hermite points per normal (nodes = mx^2); "
                    "0 = off. Forces 1-step targets (torch_d4pg/agent_kernel.py)")
     g.add_argument("--table_dir", default=None, help="Heston pricing table folder (default: repository pricing_tables)")
+    g.add_argument("--kernel_atm_fix", action="store_true",
+                   help="liability options arriving at t+1 are ATM at each quadrature node (default: strike = "
+                        "realised S_{t+1}, the original behaviour, which leaks the sampled step into the target state)")
+    g = ap.add_argument_group("speed")
+    g.add_argument("--fast_table", type=int, default=1,
+                   help="1 = vectorised bicubic table lookup (same values as SciPy up to rounding); 0 = SciPy loop")
+    g.add_argument("--fast_loss", type=int, default=1,
+                   help="1 = sorted/prefix-sum quantile-Huber loss (same loss and gradient, O(N log N)); 0 = original O(N^2)")
+    g.add_argument("--profile", default=None, help="write a cProfile of the run to this file (.prof)")
     g.add_argument("--val_at_start", action="store_true",
                    help="also validate the untrained policy (episode 0, = the rule when --warm_rule); "
                         "logged only, never selected")
@@ -251,6 +260,25 @@ def evaluate(agent_or_actor, market, spread, vega_obs, chunk=8192, actions=None,
 
 def main(argv=None):
     a = get_args(argv)
+    if a.profile:
+        import cProfile
+        import pstats
+        prof = cProfile.Profile()
+        prof.enable()
+        try:
+            return _main(a)
+        finally:
+            prof.disable()
+            prof.dump_stats(a.profile)
+            pstats.Stats(prof).sort_stats("cumulative").print_stats(40)
+    return _main(a)
+
+
+def _main(a):
+    from environment.heston_table import HestonAmericanPutTable
+    HestonAmericanPutTable.fast = bool(a.fast_table)
+    import torch_d4pg.distributional as _dist
+    _dist.FAST_LOSS = bool(a.fast_loss)
     torch.set_num_threads(a.torch_threads)
     out = Path(a.out) / a.run_name
     out.mkdir(parents=True, exist_ok=True)
@@ -280,7 +308,8 @@ def main(argv=None):
         u = make_utils(argparse.Namespace(**{**vars(a), "spread": 0.0}), a.market_seed, a.n_train_paths)
         u.table_dir = a.table_dir
         _, _, c_book = book_arrivals(u)
-        kernel = HestonKernel(u, train_m, c_book, a.vega_obs, m_x=a.kernel_mx, extra_obs=a.extra_obs)
+        kernel = HestonKernel(u, train_m, c_book, a.vega_obs, m_x=a.kernel_mx, extra_obs=a.extra_obs,
+                              atm_fix=a.kernel_atm_fix)
         agent_cls, extra_kw = D4PGKernel, dict(n_nodes=kernel.M)
         print(f"kernel target: {kernel.M} nodes, liability scale {kernel.L}")
     agent = agent_cls(env.obs_dim, **extra_kw, obj_func=a.train_obj or a.obj_func, threshold=a.threshold, std_coef=a.std_coef, seed=a.seed,
@@ -306,6 +335,7 @@ def main(argv=None):
         print(f"ep      0 (untrained, not selectable) | val VaR95 {s['VaR95']:.2f}, CVaR95 {s['CVaR95']:.2f}, "
               f"mean {s['mean_pnl']:.2f}, action mean {acts.mean():.3f}", flush=True)
     tic = time.time()
+    timing = dict(env=0.0, kernel=0.0, learn=0.0, validation=0.0)
     K = a.n_envs
     gpc = (lambda W: np.minimum(W + a.precommit_b, 0.0)) if a.precommit_b is not None else None
     for ep in range(K - 1, a.train_episodes, K):  # ep = index of the last episode of this batch of K paths
@@ -320,19 +350,27 @@ def main(argv=None):
             u = agent.policy(obs, noise=True)
             t_now = env.t
             W0 = env.W.copy()
+            _t = time.perf_counter()
             next_obs, r, done, x = env.step(agent.to_env_action(u))
+            timing["env"] += time.perf_counter() - _t
             r_train = r if a.precommit_b is None else gpc(W0 + r) - gpc(W0)
             if kernel is not None:
                 cost = -np.abs(a.spread * x * env.b["h_price"][:, t_now, t_now])
+                _t = time.perf_counter()
                 rk, ok, _, wk = kernel.transition(paths, np.full(K, t_now), env.n.copy(), cost)
+                timing["kernel"] += time.perf_counter() - _t
                 if a.precommit_b is not None:
                     W1 = W0[:, None] + rk
                     ok = np.concatenate([ok, np.where(done, 0.0, W1)[..., None]], axis=-1)
                     rk = gpc(W1) - gpc(W0)[:, None]
+                _t = time.perf_counter()
                 agent.observe_batch(obs, u, rk, ok, next_obs, done, wk)
+                timing["learn"] += time.perf_counter() - _t
             else:
+                _t = time.perf_counter()
                 for i in range(K):
                     agent.observe(obs[i], u[i], r_train[i], next_obs[i], done)
+                timing["learn"] += time.perf_counter() - _t
             obs, tot = next_obs, tot + r
         ep_rewards.extend(tot.tolist())
         if (ep + 1) % a.val_every < K or ep + 1 >= a.train_episodes:
@@ -344,6 +382,7 @@ def main(argv=None):
             score = float(objective_value(pnl, a.obj_func, a.threshold, a.std_coef))
             s = summarize(pnl, cost, n_boot=200)
             t_val += time.time() - tv
+            timing["validation"] += time.time() - tv
             row = dict(episode=ep + 1, train_seconds=t_train, val_score=score,
                        train_mean_pnl_last=float(np.mean(ep_rewards[-a.val_every:])),
                        learner_steps=agent.learner_steps, critic_loss=agent.last_losses[0],
@@ -375,7 +414,8 @@ def main(argv=None):
     res = dict(run_name=a.run_name, selected_episode=best["episode"], val_score=best["score"],
                seconds_market=t_market, seconds_train=t_train, seconds_validation=t_val,
                seconds_per_1000_episodes=1000 * t_train / a.train_episodes,
-               learner_steps=agent.learner_steps, torch_threads=a.torch_threads, cpu_count=os.cpu_count())
+               learner_steps=agent.learner_steps, torch_threads=a.torch_threads, cpu_count=os.cpu_count(),
+               timing_seconds={k: round(v, 2) for k, v in timing.items()})
     if test_m is not None:
         pnl, cost = evaluate(agent, test_m, a.spread, a.vega_obs, a=a)
         res["test"] = summarize(pnl, cost, n_boot=a.n_boot)
