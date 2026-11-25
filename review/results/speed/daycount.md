@@ -31,3 +31,16 @@ Caveats
   for the new market, so its validation VaR95 may be a little worse than a re-tuned rule and the gain a little larger.
 - P3's b was kept at the same absolute values; relative to the adi_trading rule VaR it is 0.59-0.61 x.
 - s / 1000 episodes 74-123 (up to 8 runs in parallel on 8 cores).
+
+## Rule (b) re-tuned on the adi_trading validation market (`daycount_rule_b.json`, `retune_rule_daycount.py`)
+
+Same grid and selection as the paper baseline (a, b in 0..1 step 0.1, w in 9 values; min validation VaR95).
+
+| Cost | Old (a, b, w) | Val VaR95, old params | Re-tuned (a, b, w) | Val VaR95, re-tuned | P3_daycount best val, seeds 1/2/3 | Gain vs re-tuned rule, seeds 1/2/3 | Mean (SD) |
+|---|---|---|---|---|---|---|---|
+| 0.5% | 0.3, 0.3, 0.3 | 24.84 | 0.4, 0.4, 0.75 | 24.69 | 23.46 / 23.45 / 23.35 | +1.23 / +1.24 / +1.33 | +1.27 (0.06) |
+| 1.0% | 0.3, 0.3, 0.5 | 27.64 | 0.3, 0.3, 0.5 | 27.64 | 25.80 / 25.89 / 25.68 | +1.84 / +1.75 / +1.96 | +1.85 (0.11) |
+| 2.0% | 0.2, 0.3, 1.0 | 32.66 | 0.2, 0.3, 1.0 | 32.66 | 30.83 / 30.17 / 30.62 | +1.82 / +2.49 / +2.04 | +2.12 (0.34) |
+
+Old-params values differ from the episode-0 lines by up to 0.06: the episode-0 agent is the warm-started actor
+(residual output not exactly 0), not the pure rule.
