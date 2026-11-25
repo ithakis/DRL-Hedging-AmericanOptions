@@ -3,7 +3,7 @@
 Rule (b) with blend weights and band that depend on time to horizon: separate (a, b, w) for the first
 and the second half of the 30 days (6 parameters). Tuned on VALIDATION terminal VaR95 by coordinate
 search over the same grids as rule (b) (a, b in 0..1 step 0.1, w in W_GRID), starting from the tuned
-rule (b), with a budget of about 1,100 rollouts per cost (rule (b)'s full grid is 11 x 11 x 9 = 1,089).
+rule (b) and then from random grid points (restarts), with a budget of about 1,100 rollouts per cost (rule (b)'s full grid is 11 x 11 x 9 = 1,089).
 Writes review/results/warmstart/richer_rule_params.json. No test paths are used.
 """
 import json
@@ -47,21 +47,30 @@ def main():
                 r = A.rollout(val, decider(p), True)
                 cache[p] = float(A.var_cvar(A.net(r, c))[0])
             return cache[p]
-        cur = [rb["a"], rb["b"], rb["w"]] * 2
-        best = score(cur)
-        start = best
-        improved = True
-        while improved and len(cache) < BUDGET:
-            improved = False
-            for i, g in enumerate(grids):
-                for v in g:
-                    if len(cache) >= BUDGET:
-                        break
-                    cand = list(cur)
-                    cand[i] = v
-                    s = score(cand)
-                    if s < best - 1e-9:
-                        best, cur, improved = s, cand, True
+        rng = np.random.default_rng(0)
+
+        def descend(cur):
+            best = score(cur)
+            improved = True
+            while improved and len(cache) < BUDGET:
+                improved = False
+                for i, g in enumerate(grids):
+                    for v in g:
+                        if len(cache) >= BUDGET:
+                            break
+                        cand = list(cur)
+                        cand[i] = v
+                        s = score(cand)
+                        if s < best - 1e-9:
+                            best, cur, improved = s, cand, True
+            return best, cur
+        start = score([rb["a"], rb["b"], rb["w"]] * 2)
+        best, cur = descend([rb["a"], rb["b"], rb["w"]] * 2)
+        # use the rest of the budget: coordinate descent from random grid points (restarts)
+        while len(cache) < BUDGET:
+            b2, c2 = descend([float(rng.choice(g)) for g in grids])
+            if b2 < best - 1e-9:
+                best, cur = b2, c2
         out[str(c)] = dict(early=dict(a=cur[0], b=cur[1], w=cur[2]), late=dict(a=cur[3], b=cur[4], w=cur[5]),
                            val_VaR95=best, rule_b_val_VaR95=start, evaluations=len(cache))
         print(c, out[str(c)], flush=True)
