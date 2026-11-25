@@ -9,6 +9,7 @@ from review.retrain.settings import run_name, train_args
 
 ARMS = {
     "ctrl": [],
+    "ctrl314": [],  # control in the Python 3.14 / uv env (batch 2 onward)
     "b45": ["BF", "0.45"],
     "b30": ["BF", "0.3"],
     "rin": ["--rule_obs", "--rule_frac_obs"],

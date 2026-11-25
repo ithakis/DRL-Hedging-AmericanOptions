@@ -27,14 +27,16 @@ for d in LOGS.glob("HestonP_var_spread*_seed*_*"):
 df = pd.DataFrame(rows)
 if df.empty:
     sys.exit("no runs")
-ctrl = df[df.arm == "ctrl"].set_index(["cost", "seed"])
+import os
+CTRL = os.environ.get("CTRL", "ctrl")
+ctrl = df[df.arm == CTRL].set_index(["cost", "seed"])
 out = []
 for (arm, c), g in df.groupby(["arm", "cost"]):
     g = g.set_index(["cost", "seed"])
     common = g.index.intersection(ctrl.index)
     r = dict(arm=arm, cost=c, n=len(g), done=int(g.done.sum()), best=g.best.mean(), last4=g.last4.mean(),
              val_cost=g.cost_last4.mean(), cvar=g.cvar_last4.mean())
-    if arm != "ctrl" and len(common):
+    if arm != CTRL and len(common):
         db = ctrl.loc[common, "best"] - g.loc[common, "best"]
         dl = ctrl.loc[common, "last4"] - g.loc[common, "last4"]
         r.update(paired=len(common), gain_best=db.mean(), gain_last4=dl.mean(),
