@@ -22,6 +22,8 @@ ARMS = {
     "aoc": ["--actor_on_current"],
     "dqn": ["--dqda_norm", "--dqda_clip", "3"],
     "sq05": ["--squash", "0.5"],
+    # batch 3
+    "arr2": ["--kernel_arrivals", "2"],
 }
 
 

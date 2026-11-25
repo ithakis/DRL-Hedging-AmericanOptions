@@ -24,12 +24,16 @@ class KernelReplay:
         self.o1 = np.zeros((size, M, obs_dim), np.float32)
         self.o1_real = np.zeros((size, obs_dim), np.float32)
         self.w = np.zeros((size, M), np.float32)
+        self.ga = np.zeros((size, M), np.float32)  # per-unit arrival Greeks (ArrivalExpander), 0 if unused
+        self.va = np.zeros((size, M), np.float32)
         self.d = np.zeros(size, np.float32)
         self.rng = np.random.RandomState(seed)
 
-    def add(self, o, a, r, o1, o1_real, d, w):
+    def add(self, o, a, r, o1, o1_real, d, w, ga=None, va=None):
         k = len(o)
         idx = (self.pos + np.arange(k)) % self.size
+        if ga is not None:
+            self.ga[idx], self.va[idx] = ga, va
         self.o[idx], self.a[idx], self.r[idx], self.o1[idx], self.o1_real[idx], self.d[idx] = o, a, r, o1, o1_real, d
         self.w[idx] = w
         self.pos = (self.pos + k) % self.size
@@ -41,7 +45,12 @@ class KernelReplay:
     def sample(self, B):
         i = self.rng.randint(0, self.n, B)
         t = lambda x: torch.from_numpy(x[i])
+        self.last_idx = i
         return t(self.o), t(self.a), t(self.r), t(self.o1), t(self.o1_real), t(self.d), t(self.w)
+
+    def arrival_greeks(self):
+        i = self.last_idx
+        return torch.from_numpy(self.ga[i]), torch.from_numpy(self.va[i])
 
 
 class D4PGKernel(D4PGQR):
@@ -50,12 +59,21 @@ class D4PGKernel(D4PGQR):
         super().__init__(obs_dim, **kw)
         self.M = n_nodes
         self.kmem = KernelReplay(kw.get("max_replay_size", 1_000_000), obs_dim, self.M, kw.get("seed", 0))
+        self.expander = None  # heston_kernel.ArrivalExpander (average the target over liability arrivals)
 
-    def observe_batch(self, o, u, r_nodes, o1_nodes, o1_real, done, w_nodes):
+    def sample_targets(self):
+        """Replay batch with the node set expanded over arrivals when an expander is set."""
+        o, a, r, o1, o1_real, d, w = self.kmem.sample(self.cfg["batch_size"])
+        if self.expander is not None:
+            ga, va = self.kmem.arrival_greeks()
+            o1, r, w = self.expander(o1, r, w, ga, va, d)
+        return o, a, r, o1, o1_real, d, w
+
+    def observe_batch(self, o, u, r_nodes, o1_nodes, o1_real, done, w_nodes, ga=None, va=None):
         """K transitions at once (one per parallel path)."""
         K = len(o)
         rs = self.cfg["reward_scale"]
-        self.kmem.add(o, u.reshape(K, 1), r_nodes * rs, o1_nodes, o1_real, np.full(K, float(done)), w_nodes)
+        self.kmem.add(o, u.reshape(K, 1), r_nodes * rs, o1_nodes, o1_real, np.full(K, float(done)), w_nodes, ga, va)
         for _ in range(K):
             self.n_observed += 1
             k = self.n_observed - max(self.cfg["batch_size"], self.cfg["min_replay_size"])
@@ -75,7 +93,7 @@ class D4PGKernel(D4PGQR):
         elif self.learner_steps % self.cfg["target_update_period"] == 0:
             self._hard_update()
         self.learner_steps += 1
-        o, a, r, o1, o1_real, d, w = self.kmem.sample(self.cfg["batch_size"])
+        o, a, r, o1, o1_real, d, w = self.sample_targets()
         B, M, D = o1.shape
         with torch.no_grad():
             flat = o1.reshape(B * M, D)
@@ -164,7 +182,7 @@ class D4PGKernelMean(D4PGKernel):
         elif self.learner_steps % self.cfg["target_update_period"] == 0:
             self._hard_update()
         self.learner_steps += 1
-        o, a, r, o1, o1_real, d, w = self.kmem.sample(self.cfg["batch_size"])
+        o, a, r, o1, o1_real, d, w = self.sample_targets()
         B, M, D = o1.shape
         with torch.no_grad():
             flat = o1.reshape(B * M, D)

@@ -146,6 +146,9 @@ def get_args(argv=None):
     g.add_argument("--critic_huber", type=float, default=0.0, help="mean critic: Huber delta (0 = MSE)")
     g.add_argument("--precommit_kappa", type=float, default=0.0,
                    help="smoothed hinge g(W) = -kappa softplus(-(W + b) / kappa) (0 = min(W + b, 0))")
+    g.add_argument("--kernel_arrivals", type=int, default=0,
+                   help="K > 0: average the kernel target over the net liability arrival count k in {-K..K} "
+                        "(Skellam), instead of the realised count")
     g.add_argument("--rule_frac_obs", action="store_true", help="state + rule (b)'s hedge fraction (needs --warm_rule)")
     g.add_argument("--precommit_b", type=float, default=None,
                    help="pre-commitment objective (Rockafellar-Uryasev / Bauerle-Ott): state + accumulated P&L W_t, "
@@ -320,7 +323,7 @@ def _main(a):
         u.table_dir = a.table_dir
         _, _, c_book = book_arrivals(u)
         kernel = HestonKernel(u, train_m, c_book, a.vega_obs, m_x=a.kernel_mx, extra_obs=a.extra_obs,
-                              atm_fix=a.kernel_atm_fix)
+                              atm_fix=a.kernel_atm_fix, arrivals=a.kernel_arrivals > 0)
         agent_cls, extra_kw = D4PGKernel, dict(n_nodes=kernel.M)
         if a.critic_type == "mean":
             from torch_d4pg.agent_kernel import D4PGKernelMean
@@ -335,6 +338,14 @@ def _main(a):
                    tail_quantiles=a.tail_quantiles, activation=a.activation,
                    actor_on_current=a.actor_on_current, var_smooth=a.var_smooth, dqda_clip=a.dqda_clip,
                    squash=a.squash, dqda_norm=a.dqda_norm)
+    if kernel is not None and a.kernel_arrivals > 0:
+        from torch_d4pg.heston_kernel import ArrivalExpander
+        base = 5 + (2 if a.extra_obs else 0)
+        lay = dict(rule_obs_col=base if a.rule_obs else None,
+                   rule_frac_col=(base + (2 if a.rule_obs else 0)) if a.rule_frac_obs else None,
+                   rule=tuple(float(x) for x in a.warm_rule.split(",")) if a.rule_frac_obs else None)
+        agent.expander = ArrivalExpander(a.poisson_rate, a.kernel_arrivals, lay)
+        print(f"kernel target averaged over liability arrivals k in [-{a.kernel_arrivals}, {a.kernel_arrivals}]")
 
     rows, best = [], dict(score=np.inf)
     t_train, t_val, ep_rewards = 0.0, 0.0, []
@@ -385,7 +396,10 @@ def _main(a):
                     ok = np.concatenate([ok, np.where(done, 0.0, W1)[..., None]], axis=-1)
                     rk = gpc(W1) - gpc(W0)[:, None]
                 _t = time.perf_counter()
-                agent.observe_batch(obs, u, rk, ok, next_obs, done, wk)
+                ga = va = None
+                if a.kernel_arrivals > 0:
+                    ga, va = kernel.last_arrival_greeks
+                agent.observe_batch(obs, u, rk, ok, next_obs, done, wk, ga, va)
                 timing["learn"] += time.perf_counter() - _t
             else:
                 _t = time.perf_counter()

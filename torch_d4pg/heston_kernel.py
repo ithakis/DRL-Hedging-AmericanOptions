@@ -144,8 +144,13 @@ class HestonKernel:
     """
 
     def __init__(self, utils, market, c, vega_obs=True, m_x=3, psiC=1.5, gamma1=0.5, gamma2=0.5, extra_obs=False,
-                 atm_fix=False):
+                 atm_fix=False, arrivals=False):
         self.extra_obs = extra_obs
+        # arrivals: do not use the realised number of liability options arriving at t+1 (sampled noise in the
+        # target); return the next state without them plus the per-unit ATM liability Greeks, so that the learner
+        # averages over the net count k ~ Skellam(rate/2, rate/2) (see ArrivalExpander).
+        self.arrivals = arrivals
+        self.last_arrival_greeks = None
         # atm_fix: liability options that arrive at t+1 are ATM at the quadrature node (strike S'_j).
         # False keeps the original behaviour (strike = realised S_{t+1} of the path), which leaks the
         # sampled next price into the next-state Greeks of the target.  The reward is not affected.
@@ -237,6 +242,8 @@ class HestonKernel:
         # arrivals at t+1: net number c[p, t+1], ttm = liab_ttm. Strike: the realised S_{t+1} of the path
         # (original code), or the node price S'_j (atm_fix: ATM at the node, as the simulator does)
         c1 = bk.c[p, np.minimum(t1, bk.T1 - 1)] * (t1 <= bk.T1 - 1)
+        if self.arrivals and not realised:
+            c1 = np.zeros_like(c1)
         K1 = S1 if self.atm_fix else np.broadcast_to(bk.S_arr[p, np.minimum(t1, bk.T1 - 1)][:, None], S1.shape)
         # the two ATM-type lookups (new liability column, new hedge option) in one table call
         _, _, g2, v2 = bk.table.evaluate(np.concatenate([S1, S1], 1), np.concatenate([K1, S1], 1),
@@ -246,6 +253,8 @@ class HestonKernel:
         lg = l_ga + c1[:, None] * g2[:, :M_]
         lv = l_ve + c1[:, None] * v2[:, :M_]
         gh, vh = g2[:, M_:], v2[:, M_:]
+        if self.arrivals and not realised:  # per-unit arrival Greeks in state units (B, M)
+            self.last_arrival_greeks = (self.L * g2[:, :M_], self.L * v2[:, :M_])
         cols = [S1, self.L * lg + hg, bk.cs * gh]
         if self.vega_obs:
             cols += [self.L * lv + hv, bk.cs * vh]
@@ -260,3 +269,53 @@ class HestonKernel:
         done = t1 == self.T
         obs1[done, :, 1:] = 0.0
         return r, obs1, done, w
+
+
+class ArrivalExpander:
+    """Expands stored kernel next states (no arrivals at t+1) over the net arrival count k in {-K..K},
+    k ~ Skellam(rate/2, rate/2) truncated and renormalised: G' += k gA, V' += k vA (state columns 1 and 3), and the
+    derived columns (n_G, n_V, rule fraction) are recomputed. W (last column, if present) and rewards do not change.
+    Torch, at learn time, so the replay memory stays at M nodes per transition."""
+
+    def __init__(self, rate=1.0, kmax=2, layout=None):
+        from scipy.stats import skellam
+        ks = np.arange(-kmax, kmax + 1)
+        p = skellam.pmf(ks, rate / 2, rate / 2)
+        import torch
+        self.k = torch.tensor(ks, dtype=torch.float32)
+        self.p = torch.tensor(p / p.sum(), dtype=torch.float32)
+        self.Kn = len(ks)
+        self.layout = layout  # dict: rule_obs_col (index of n_G or None), rule_frac_col (index or None), rule (a, b, w)
+
+    def __call__(self, o1, r, w, ga, va, d):
+        """o1 (B, M, D), r (B, M), w (B, M), ga/va (B, M), d (B,) -> (B, M*Kn, D), (B, M*Kn), (B, M*Kn)."""
+        import torch
+        B, M, D = o1.shape
+        live = (1.0 - d)[:, None, None]
+        o = o1.unsqueeze(2).repeat(1, 1, self.Kn, 1)                       # (B, M, Kn, D)
+        o[..., 1] = o[..., 1] + live * ga.unsqueeze(-1) * self.k
+        o[..., 3] = o[..., 3] + live * va.unsqueeze(-1) * self.k
+        L = self.layout or {}
+        if L.get("rule_obs_col") is not None or L.get("rule_frac_col") is not None:
+            G, gh, V, vh = o[..., 1], o[..., 2], o[..., 3], o[..., 4]
+            ng = torch.nan_to_num(-G / gh, nan=0.0, posinf=0.0, neginf=0.0).clamp(-1e3, 1e3)
+            nv = torch.nan_to_num(-V / vh, nan=0.0, posinf=0.0, neginf=0.0).clamp(-1e3, 1e3)
+            alive = live.squeeze(-1).unsqueeze(-1).expand_as(ng) > 0
+            if L.get("rule_obs_col") is not None:
+                j = L["rule_obs_col"]
+                o[..., j] = torch.where(alive, ng, o[..., j])
+                o[..., j + 1] = torch.where(alive, nv, o[..., j + 1])
+            if L.get("rule_frac_col") is not None:
+                a_, b_, w_ = L["rule"]
+                lo = torch.minimum(torch.zeros_like(ng), torch.minimum(ng, nv))
+                hi = torch.maximum(torch.zeros_like(ng), torch.maximum(ng, nv))
+                x = torch.minimum(torch.maximum(a_ * ng + b_ * nv, lo), hi)
+                x = torch.where(x.abs() < w_, torch.zeros_like(x), x)
+                f = torch.where(hi > lo, (x - lo) / (hi - lo).clamp_min(1e-30), torch.zeros_like(x))
+                f = torch.nan_to_num(f, nan=0.0).clamp(0.0, 1.0)
+                j = L["rule_frac_col"]
+                o[..., j] = torch.where(alive, f, o[..., j])
+        o = o.reshape(B, M * self.Kn, D)
+        r2 = r.unsqueeze(-1).expand(B, M, self.Kn).reshape(B, M * self.Kn)
+        w2 = (w.unsqueeze(-1) * self.p).reshape(B, M * self.Kn)
+        return o, r2, w2
