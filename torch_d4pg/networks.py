@@ -105,8 +105,10 @@ class Actor(nn.Module):
     def preact(self, obs):
         return self.head(self.body(self.norm_in(obs)))
 
+    squash = 1.0  # output u = tanh(squash * preact); 0.5 = softer squash (swing beta-sigmoid 1.5 analogue)
+
     def forward(self, obs):
-        return torch.tanh(self.preact(obs))
+        return torch.tanh(self.squash * self.preact(obs))
 
 
 def quantile_grid(interval: float = 0.01, tail: bool = False):

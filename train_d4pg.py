@@ -137,6 +137,9 @@ def get_args(argv=None):
     g.add_argument("--var_smooth", type=float, default=0.0, help="actor VaR objective: triangular weights over "
                    "quantile levels within +-var_smooth of 5%% (0 = one quantile)")
     g.add_argument("--dqda_clip", type=float, default=1.0)
+    g.add_argument("--dqda_norm", action="store_true", help="divide dQ/da by an EMA of its batch mean |.| before the clip")
+    g.add_argument("--squash", type=float, default=1.0, help="actor output tanh(squash * preact)")
+    g.add_argument("--precommit_lambda", type=float, default=0.0, help="g(W) = hinge + lambda W (mean-P&L blend)")
     g.add_argument("--rule_obs", action="store_true", help="state + [n_G, n_V] (the rule's inputs)")
     g.add_argument("--critic_type", choices=["quantile", "mean"], default="quantile",
                    help="mean: scalar critic with the expected kernel target (pre-commitment / --train_obj mean only)")
@@ -330,7 +333,8 @@ def _main(a):
                    obs_center=center, obs_scale=scale, actor_lr=a.actor_lr, residual_l2=a.residual_l2,
                    tau=a.tau, reward_scale=a.reward_scale, ema_decay=a.ema_decay, n_envs=a.n_envs,
                    tail_quantiles=a.tail_quantiles, activation=a.activation,
-                   actor_on_current=a.actor_on_current, var_smooth=a.var_smooth, dqda_clip=a.dqda_clip)
+                   actor_on_current=a.actor_on_current, var_smooth=a.var_smooth, dqda_clip=a.dqda_clip,
+                   squash=a.squash, dqda_norm=a.dqda_norm)
 
     rows, best = [], dict(score=np.inf)
     t_train, t_val, ep_rewards = 0.0, 0.0, []
@@ -352,6 +356,9 @@ def _main(a):
     if a.precommit_b is not None and a.precommit_kappa > 0:
         kap = a.precommit_kappa
         gpc = lambda W: -kap * np.logaddexp(0.0, -(W + a.precommit_b) / kap)
+    if a.precommit_b is not None and a.precommit_lambda > 0:
+        _g0, lam = gpc, a.precommit_lambda
+        gpc = lambda W: _g0(W) + lam * W
     for ep in range(K - 1, a.train_episodes, K):  # ep = index of the last episode of this batch of K paths
         agent.train_actor = ep >= a.actor_freeze_episodes
         if a.noise_mode == "pre":

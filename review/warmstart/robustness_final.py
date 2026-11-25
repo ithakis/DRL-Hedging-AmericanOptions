@@ -37,6 +37,7 @@ def agent_rollout(run_dir, m):
     cfg = json.load(open(Path(run_dir) / "config.json"))
     HedgingEnv.extra_obs = bool(cfg.get("extra_obs"))
     HedgingEnv.rule_obs = bool(cfg.get("rule_obs"))
+    HedgingEnv.rule_frac = (tuple(float(x) for x in cfg["warm_rule"].split(",")) if cfg.get("rule_frac_obs") else None)
     HedgingEnv.band = float(cfg.get("band") or 0.0)
     HedgingEnv.pnl_obs = cfg.get("precommit_b") is not None
     env = T.make_env(m, cfg["spread"], cfg["vega_obs"], argparse.Namespace(**cfg))
@@ -57,6 +58,7 @@ def agent_rollout(run_dir, m):
         tot += r
         cost += np.abs(cfg["spread"] * x * b["h_price"][:, t, t])
     HedgingEnv.extra_obs = HedgingEnv.rule_obs = HedgingEnv.pnl_obs = False
+    HedgingEnv.rule_frac = None
     HedgingEnv.band = 0.0
     return dict(net=tot, cost=cost, db=db)
 

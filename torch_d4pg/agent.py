@@ -34,7 +34,8 @@ class D4PGQR:
                  min_replay_size=1000, samples_per_insert=32.0, max_replay_size=1_000_000,
                  clip_norm=40.0, dqda_clip=1.0, obs_center=None, obs_scale=None, obs_clip=10.0,
                  actor_lr=None, residual_l2=0.0, tau=0.0, reward_scale=1.0, ema_decay=0.0, n_envs=1,
-                 tail_quantiles=False, activation="acme", actor_on_current=False, var_smooth=0.0):
+                 tail_quantiles=False, activation="acme", actor_on_current=False, var_smooth=0.0,
+                 squash=1.0, dqda_norm=False):
         torch.manual_seed(seed)
         self.rng = np.random.default_rng(seed)
         self.cfg = dict(obs_dim=obs_dim, obj_func=obj_func, threshold=threshold, std_coef=std_coef, seed=seed,
@@ -47,8 +48,11 @@ class D4PGQR:
                         obs_scale=None if obs_scale is None else [float(x) for x in obs_scale],
                         obs_clip=obs_clip, actor_lr=actor_lr, residual_l2=residual_l2, tau=tau,
                         reward_scale=reward_scale, ema_decay=ema_decay, n_envs=n_envs, tail_quantiles=tail_quantiles,
-                        activation=activation, actor_on_current=actor_on_current, var_smooth=var_smooth)
+                        activation=activation, actor_on_current=actor_on_current, var_smooth=var_smooth,
+                        squash=squash, dqda_norm=dqda_norm)
         self.actor = Actor(obs_dim, actor_sizes, ObsNormalizer(obs_dim, obs_center, obs_scale, obs_clip), activation)
+        self.actor.squash = float(squash)
+        self.dqda_scale = None  # EMA of the batch mean |dQ/da| (dqda_norm)
         self.critic = QuantileCritic(obs_dim, critic_sizes, norm=ObsNormalizer(obs_dim, obs_center, obs_scale, obs_clip),
                                      tail_quantiles=tail_quantiles, activation=activation)
         self.actor_target = copy.deepcopy(self.actor)
@@ -82,7 +86,7 @@ class D4PGQR:
         x = torch.as_tensor(obs, dtype=torch.float32)
         if noise and self.noise_mode == "pre":
             z = self.actor.preact(x)
-            return torch.tanh(z + torch.randn_like(z) * self.sigma_now).numpy()
+            return torch.tanh(self.actor.squash * z + torch.randn_like(z) * self.sigma_now).numpy()
         u = self.actor(x)
         if noise:
             eps = torch.randn_like(u) * self.cfg["sigma"]
@@ -175,6 +179,17 @@ class D4PGQR:
         self.last_losses = (float(critic_loss.detach()), float(actor_loss.detach()))
         self._after_step()
 
+    def _shape_dqda(self, dqda):
+        """Per-sample clip to [-c, c] (acme), or with dqda_norm: divide by an EMA of the batch mean |dQ/da| first, so
+        the relative size of the gradient across states is kept (c then acts as a loose clip)."""
+        c = self.cfg["dqda_clip"]
+        if self.cfg.get("dqda_norm"):
+            m = float(dqda.abs().mean())
+            self.dqda_scale = m if self.dqda_scale is None else 0.99 * self.dqda_scale + 0.01 * m
+            dqda = dqda / max(self.dqda_scale, 1e-8)
+        dqda = dqda.clamp(-c, c)
+        return dqda * torch.clamp(c / dqda.norm(dim=-1, keepdim=True).clamp_min(1e-12), max=1.0)
+
     def _after_step(self):
         if self.cfg["tau"] > 0:
             self._soft_update(self.cfg["tau"])
@@ -200,6 +215,7 @@ class D4PGQR:
                       ObsNormalizer(cfg["obs_dim"], cfg.get("obs_center"), cfg.get("obs_scale"), cfg.get("obs_clip", 10.0)),
                       cfg.get("activation", "acme"))
         actor.load_state_dict(ck["actor"])
+        actor.squash = float(cfg.get("squash", 1.0))
         return actor, cfg
 
 

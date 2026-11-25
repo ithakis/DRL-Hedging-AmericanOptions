@@ -17,7 +17,11 @@ ARMS = {
     # batch 2
     "mc": ["--critic_type", "mean"],
     "kap1": ["--precommit_kappa", "1.0"],
-    "kap3": ["--precommit_kappa", "3.0"],
+    "lam05": ["--precommit_lambda", "0.05"],
+    "lam15": ["--precommit_lambda", "0.15"],
+    "aoc": ["--actor_on_current"],
+    "dqn": ["--dqda_norm", "--dqda_clip", "3"],
+    "sq05": ["--squash", "0.5"],
 }
 
 

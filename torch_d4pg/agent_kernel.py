@@ -102,9 +102,7 @@ class D4PGKernel(D4PGQR):
         a_det = act.detach().requires_grad_(True)
         q = self.objective(self.critic(o_t, a_det))
         dqda = torch.autograd.grad(q.sum(), a_det)[0]
-        c = self.cfg["dqda_clip"]
-        dqda = dqda.clamp(-c, c)
-        dqda = dqda * torch.clamp(c / dqda.norm(dim=-1, keepdim=True).clamp_min(1e-12), max=1.0)
+        dqda = self._shape_dqda(dqda)
         target = (act + dqda).detach()
         actor_loss = (0.5 * (target - act).pow(2).sum(-1)).mean()
         if self.cfg["residual_l2"] > 0:
@@ -189,9 +187,7 @@ class D4PGKernelMean(D4PGKernel):
         a_det = act.detach().requires_grad_(True)
         qa = self.objective(self.critic(o_t, a_det))
         dqda = torch.autograd.grad(qa.sum(), a_det)[0]
-        cl = self.cfg["dqda_clip"]
-        dqda = dqda.clamp(-cl, cl)
-        dqda = dqda * torch.clamp(cl / dqda.norm(dim=-1, keepdim=True).clamp_min(1e-12), max=1.0)
+        dqda = self._shape_dqda(dqda)
         target = (act + dqda).detach()
         actor_loss = (0.5 * (target - act).pow(2).sum(-1)).mean()
         if self.cfg["residual_l2"] > 0:
