@@ -27,6 +27,8 @@ ARMS = {
     "arr2": ["--kernel_arrivals", "2"],
     "allb": ["BRANGE", "0.3,0.9"],     # all-b policy, b ~ U[0.3, 0.9] x rule VaR, evaluated at 0.6
     "ramp": ["CAPF", "1.25"],          # hinge floored at -(1.25 x rule VaR - b)
+    # batch 4 (robustness)
+    "rv0": ["--train_init_vol_range", "0.12,0.5"],
 }
 
 
