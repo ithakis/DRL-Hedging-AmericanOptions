@@ -1,0 +1,35 @@
+Wed Nov 25 12:33:38 2026    /tmp/e3a_fastloss.prof
+
+         35312708 function calls (32063334 primitive calls) in 167.156 seconds
+
+   Ordered by: cumulative time
+   List reduced from 6625 to 25 due to restriction <25>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.115    0.115  167.158  167.158 /Users/alexanderithakis/Documents/GitHub/DRL-Hedging-speed/train_d4pg.py:277(_main)
+     3750    0.343    0.000  144.809    0.039 /Users/alexanderithakis/Documents/GitHub/DRL-Hedging-speed/torch_d4pg/agent_kernel.py:53(observe_batch)
+     7376    0.399    0.000  144.364    0.020 /Users/alexanderithakis/Documents/GitHub/DRL-Hedging-speed/torch_d4pg/agent_kernel.py:70(learn)
+     7376    0.950    0.000  100.686    0.014 /Users/alexanderithakis/Documents/GitHub/DRL-Hedging-speed/torch_d4pg/distributional.py:132(quantile_huber_loss)
+     7376    0.026    0.000   99.727    0.014 /Users/alexanderithakis/miniforge3/lib/python3.10/site-packages/torch/autograd/function.py:565(apply)
+     7376    0.077    0.000   99.663    0.014 {built-in method apply}
+     7376    0.078    0.000   99.586    0.014 /Users/alexanderithakis/Documents/GitHub/DRL-Hedging-speed/torch_d4pg/distributional.py:119(forward)
+     7376   99.074    0.013   99.087    0.013 /Users/alexanderithakis/Documents/GitHub/DRL-Hedging-speed/torch_d4pg/distributional.py:52(_qh_kernel_sorted)
+331830/41058    0.162    0.000   26.755    0.001 /Users/alexanderithakis/miniforge3/lib/python3.10/site-packages/torch/nn/modules/module.py:1771(_wrapped_call_impl)
+331830/41058    0.298    0.000   26.728    0.001 /Users/alexanderithakis/miniforge3/lib/python3.10/site-packages/torch/nn/modules/module.py:1779(_call_impl)
+    33558    1.145    0.000   23.895    0.001 /Users/alexanderithakis/Documents/GitHub/DRL-Hedging-speed/torch_d4pg/networks.py:62(forward)
+     3750    0.283    0.000   16.392    0.004 /Users/alexanderithakis/Documents/GitHub/DRL-Hedging-speed/torch_d4pg/heston_kernel.py:218(transition)
+    11120    1.189    0.000   15.035    0.001 /Users/alexanderithakis/Documents/GitHub/DRL-Hedging-speed/environment/heston_table.py:275(evaluate)
+    18532    0.233    0.000   14.130    0.001 /Users/alexanderithakis/Documents/GitHub/DRL-Hedging-speed/torch_d4pg/networks.py:138(forward)
+    11120    5.412    0.000   13.155    0.001 /Users/alexanderithakis/Documents/GitHub/DRL-Hedging-speed/environment/heston_table.py:244(_ev_fast)
+    15026    0.065    0.000   12.459    0.001 /Users/alexanderithakis/Documents/GitHub/DRL-Hedging-speed/torch_d4pg/networks.py:105(preact)
+    11276    0.014    0.000   12.170    0.001 /Users/alexanderithakis/Documents/GitHub/DRL-Hedging-speed/torch_d4pg/networks.py:108(forward)
+   100674    2.210    0.000   11.161    0.000 /Users/alexanderithakis/Documents/GitHub/DRL-Hedging-speed/torch_d4pg/networks.py:68(<lambda>)
+   100674    8.951    0.000    8.951    0.000 {built-in method torch.sigmoid}
+   100674    0.140    0.000    8.241    0.000 /Users/alexanderithakis/miniforge3/lib/python3.10/site-packages/torch/nn/modules/normalization.py:228(forward)
+   100674    0.098    0.000    8.059    0.000 /Users/alexanderithakis/miniforge3/lib/python3.10/site-packages/torch/nn/functional.py:2880(layer_norm)
+   100674    7.914    0.000    7.914    0.000 {built-in method torch.layer_norm}
+     3751    0.143    0.000    7.609    0.002 /Users/alexanderithakis/Documents/GitHub/DRL-Hedging-speed/torch_d4pg/heston_kernel.py:62(liab)
+     3750    0.089    0.000    6.672    0.002 /Users/alexanderithakis/Documents/GitHub/DRL-Hedging-speed/torch_d4pg/heston_kernel.py:81(hedges)
+    14936    0.032    0.000    5.928    0.000 /Users/alexanderithakis/miniforge3/lib/python3.10/site-packages/torch/autograd/graph.py:832(_engine_run_backward)
+
+

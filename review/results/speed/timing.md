@@ -29,3 +29,21 @@ Possible next speed-ups (not done here):
 - Or compute the loss once per batch row instead of repeating z_pred 9 times (repeat_interleave),
   merging the 9 node targets with their weights.
 - Allow more numba threads for this kernel only (it is already `prange` over rows) when cores are free.
+
+## Update: sorted quantile-Huber loss (commit f25968a, `--fast_loss 1`, default)
+
+Equivalence test `[loss]` (2,304 x 99 x 99): max rel diff of loss and gradient 0 (spread 0.3, 3, 30 x k 1, and k 0.1),
+except 8.9e-08 / 9.3e-08 at spread 30; one call 39.2 ms (old) vs 19.1 ms (sorted), 2.1x. All other checks still pass.
+
+| Code | s / 1,000 episodes | train s | env | kernel | learn | validation |
+|---|---|---|---|---|---|---|
+| base (7644745) | 177.4 | 354.8 | - | - | - | 3.0 |
+| speed branch, old loss | 173.5 | 347.0 | 0.8 | 15.5 | 330.2 | 2.2 |
+| speed branch, sorted loss | 78.8 | 157.5 | 0.8 | 15.6 | 140.2 | 3.0 |
+
+2.25x faster than base in total. Validation VaR95 at 512 / 1008 / 1504 / 2000: 32.80 / 32.83 / 33.93 / 33.57
+(old: 32.80 / 32.83 / 33.93 / 33.64; the small change at 2000 is float32 rounding of the loss carried by training).
+Selected episode unchanged (1008).
+
+Profile (`profile_fastloss_*.txt`): the sorted loss kernel is still the largest item, 99 s of the profiled run
+(13 ms per call), then sigmoid 9 s, layer_norm 8 s, table lookup 13 s, backward 6 s.
