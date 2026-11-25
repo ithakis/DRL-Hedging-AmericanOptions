@@ -6,6 +6,8 @@ search over the same grids as rule (b) (a, b in 0..1 step 0.1, w in W_GRID), sta
 rule (b) and then from random grid points (restarts), with a budget of about 1,100 rollouts per cost (rule (b)'s full grid is 11 x 11 x 9 = 1,089).
 Writes review/results/warmstart/richer_rule_params.json. No test paths are used.
 """
+import argparse
+import itertools
 import json
 from pathlib import Path
 
@@ -31,13 +33,32 @@ def decider(p):
     return f
 
 
+def tune_rule_b(val, c):
+    """Rule (b) full grid (as review/retrain/analysis.py) on validation terminal VaR95."""
+    best = None
+    for aa, bb, ww in itertools.product(A.A_GRID, A.A_GRID, A.W_GRID):
+        v = float(A.var_cvar(A.net(A.rollout(val, A.rule_decider("rule", aa, bb, ww), True), c))[0])
+        if best is None or v < best[0] - 1e-12:
+            best = (v, float(aa), float(bb), float(ww))
+    return dict(a=best[1], b=best[2], w=best[3], VaR95=best[0])
+
+
 def main():
-    a = A.block_args("B", ["--market_dir", "../DRL-Hedging-retrain/markets"])
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--pricing_backend", default="table")
+    ap.add_argument("--costs", default=",".join(str(c) for c in COSTS))
+    ap.add_argument("--retune_rule_b", action="store_true", help="re-tune rule (b) on this market first")
+    args = ap.parse_args()
+    a = A.block_args("B", ["--market_dir", "../DRL-Hedging-retrain/markets", "--pricing_backend", args.pricing_backend,
+                           "--table_dir", "../DRL-Hedging-retrain/pricing_tables"])
     val = A.T.get_market(a, a.val_seed, a.n_val)
-    base = json.load(open("review/results/retrain/baselines_B.json"))
+    costs = [float(x) for x in args.costs.split(",")]
+    base = {f"{c}_0": {"rule_b_VaR95": tune_rule_b(val, c) if args.retune_rule_b
+                       else json.load(open("review/results/retrain/baselines_B.json"))[f"{c}_0"]["rule_b_VaR95"]}
+            for c in costs}
     grids = [list(A.A_GRID), list(A.A_GRID), list(A.W_GRID)] * 2
     out = {}
-    for c in COSTS:
+    for c in costs:
         rb = base[f"{c}_0"]["rule_b_VaR95"]
         cache = {}
 
@@ -71,11 +92,12 @@ def main():
             b2, c2 = descend([float(rng.choice(g)) for g in grids])
             if b2 < best - 1e-9:
                 best, cur = b2, c2
-        out[str(c)] = dict(early=dict(a=cur[0], b=cur[1], w=cur[2]), late=dict(a=cur[3], b=cur[4], w=cur[5]),
+        out[str(c)] = dict(rule_b=base[f"{c}_0"]["rule_b_VaR95"], early=dict(a=cur[0], b=cur[1], w=cur[2]), late=dict(a=cur[3], b=cur[4], w=cur[5]),
                            val_VaR95=best, rule_b_val_VaR95=start, evaluations=len(cache))
         print(c, out[str(c)], flush=True)
     OUT.mkdir(parents=True, exist_ok=True)
-    json.dump(out, open(OUT / "richer_rule_params.json", "w"), indent=2)
+    json.dump(out, open(OUT / f"richer_rule_params_{args.pricing_backend}_{args.costs}.json", "w"), indent=2,
+              default=float)
 
 
 if __name__ == "__main__":
