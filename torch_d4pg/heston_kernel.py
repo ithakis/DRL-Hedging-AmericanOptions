@@ -143,8 +143,13 @@ class HestonKernel:
     realised=True uses the realised next step of the path (M = 1): reproduces the env exactly (bookkeeping test).
     """
 
-    def __init__(self, utils, market, c, vega_obs=True, m_x=3, psiC=1.5, gamma1=0.5, gamma2=0.5, extra_obs=False):
+    def __init__(self, utils, market, c, vega_obs=True, m_x=3, psiC=1.5, gamma1=0.5, gamma2=0.5, extra_obs=False,
+                 atm_fix=False):
         self.extra_obs = extra_obs
+        # atm_fix: liability options that arrive at t+1 are ATM at the quadrature node (strike S'_j).
+        # False keeps the original behaviour (strike = realised S_{t+1} of the path), which leaks the
+        # sampled next price into the next-state Greeks of the target.  The reward is not affected.
+        self.atm_fix = atm_fix
         self.bk = Book(utils, market, c)
         self.m = {k: np.asarray(market[k]) for k in ("S", "V", "l_price", "l_delta", "h_price", "h_delta")}
         n0 = min(64, self.bk.P)
@@ -219,15 +224,28 @@ class HestonKernel:
             S1, vol1, w = self.nodes(S, vol)
         t1 = t + 1
         # P&L over (t, t+1]: book held at t, valued at t+1 (arrivals at t+1 excluded, as l_next)
-        lp1 = self.L * bk.liab(p, t1, S1, vol1, t)[0]
-        hp1 = bk.hedges(p, t1, S1, vol1, n, t)[0]
+        # one table pass for the liability book held at t and one for the hedges (the next state reuses
+        # them; the arrivals at t+1 are added as one extra column). Same numbers as calling liab/hedges
+        # twice, up to summation order (~1e-16).
+        l_pr, _, l_ga, l_ve = bk.liab(p, t1, S1, vol1, t)
+        hp1, _, hg, hv = bk.hedges(p, t1, S1, vol1, n, t)
+        lp1 = self.L * l_pr
         h_now = np.sum(n * m["h_price"][p, t, :] * (np.arange(bk.T1)[None, :] <= t[:, None]), axis=1)
         pos = -(m["l_delta"][p, t] + np.sum(n * m["h_delta"][p, t, :] * (np.arange(bk.T1)[None, :] <= t[:, None]), axis=1))
         r = cost[:, None] + lp1 - m["l_price"][p, t][:, None] + hp1 - h_now[:, None] + pos[:, None] * (S1 - S[:, None])
         # next state: book incl. arrivals at t+1, hedges held, and the new ATM hedge of t+1
-        _, _, lg, lv = bk.liab(p, t1, S1, vol1, t1)
-        _, _, hg, hv = bk.hedges(p, t1, S1, vol1, n, t)
-        _, _, gh, vh = bk.table.evaluate(S1, S1, np.full(S1.shape, bk.hed_ttm), vol1)
+        # arrivals at t+1: net number c[p, t+1], ttm = liab_ttm. Strike: the realised S_{t+1} of the path
+        # (original code), or the node price S'_j (atm_fix: ATM at the node, as the simulator does)
+        c1 = bk.c[p, np.minimum(t1, bk.T1 - 1)] * (t1 <= bk.T1 - 1)
+        K1 = S1 if self.atm_fix else np.broadcast_to(bk.S_arr[p, np.minimum(t1, bk.T1 - 1)][:, None], S1.shape)
+        # the two ATM-type lookups (new liability column, new hedge option) in one table call
+        _, _, g2, v2 = bk.table.evaluate(np.concatenate([S1, S1], 1), np.concatenate([K1, S1], 1),
+                                         np.concatenate([np.full(S1.shape, bk.liab_ttm), np.full(S1.shape, bk.hed_ttm)], 1),
+                                         np.concatenate([vol1, vol1], 1))
+        M_ = S1.shape[1]
+        lg = l_ga + c1[:, None] * g2[:, :M_]
+        lv = l_ve + c1[:, None] * v2[:, :M_]
+        gh, vh = g2[:, M_:], v2[:, M_:]
         cols = [S1, self.L * lg + hg, bk.cs * gh]
         if self.vega_obs:
             cols += [self.L * lv + hv, bk.cs * vh]
