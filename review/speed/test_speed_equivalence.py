@@ -79,6 +79,36 @@ def main():
     t_new = timeit(lambda: _qh_kernel_sorted(zp, zt, tau, 1.0), 5)
     print(f"[loss] 2304 x 99 x 99: original {1e3 * t_old:.1f} ms, sorted {1e3 * t_new:.1f} ms -> {t_old / t_new:.1f}x")
 
+    # mixture (density target) loss in one row vs the repeated per-node loss, value and gradient
+    import torch
+    import torch_d4pg.distributional as D
+    B_, M_, N_ = 256, 9, 99
+    g_ = torch.Generator().manual_seed(0)
+    q_ = torch.linspace(0.01, 0.99, 99)
+    zp_ = (30 + 3 * torch.randn(B_, N_, generator=g_)).requires_grad_(True)
+    zn_ = 30 + 3 * torch.randn(B_ * M_, N_, generator=g_)
+    r_ = torch.randn(B_, M_, generator=g_)
+    d_ = (torch.rand(B_, generator=g_) > 0.1).float()
+    w_ = torch.rand(B_, M_, generator=g_)
+    w_ = w_ / w_.sum(1, keepdim=True)
+    D.FAST_LOSS = False
+    l_old = (D.quantile_huber_loss(zp_.repeat_interleave(M_, 0), q_, r_.reshape(-1, 1),
+                                   d_.repeat_interleave(M_).unsqueeze(-1), zn_).reshape(B_, M_) * w_).sum(1).mean()
+    g_old, = torch.autograd.grad(l_old, zp_)
+    D.FAST_LOSS = True
+    l_new = D.quantile_huber_loss_mixture(zp_, q_, r_, d_, zn_.reshape(B_, M_, N_), w_).mean()
+    g_new, = torch.autograd.grad(l_new, zp_)
+    el = abs(float(l_new - l_old)) / abs(float(l_old))
+    eg = float((g_new - g_old).abs().max() / g_old.abs().max())
+    print(f"[loss mixture] rel diff loss {el:.1e}, grad {eg:.1e}")
+    assert el < 1e-5 and eg < 1e-5, "mixture loss differs"
+    t_old = timeit(lambda: D._qh_kernel(zp_.detach().repeat_interleave(M_, 0).numpy(), zn_.numpy(), q_.numpy(), 1.0), 3)
+    zt_ = (r_.unsqueeze(-1) + d_.reshape(B_, 1, 1) * zn_.reshape(B_, M_, N_)).reshape(B_, -1).numpy()
+    wt_ = (w_ / N_).unsqueeze(-1).expand(B_, M_, N_).reshape(B_, -1).numpy().astype(np.float64)
+    t_new = timeit(lambda: D._qh_kernel_weighted(zp_.detach().numpy(), zt_, wt_, q_.numpy(), 1.0), 3)
+    print(f"[loss mixture] 256 x 9 nodes: original {1e3 * t_old:.1f} ms, one-row weighted {1e3 * t_new:.1f} ms "
+          f"-> {t_old / t_new:.1f}x")
+
     # ---------------------------------------------------------------- 1. table
     from review.retrain.settings import train_args
     import train_d4pg as T

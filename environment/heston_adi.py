@@ -132,8 +132,22 @@ def build_operators(s, v, kappa, theta, xi, rho, r, q):
     return mats
 
 
-def solve_surface(kappa, theta, xi, rho, r, q, n_days, days_per_year=252, grid: ADIGrid = ADIGrid()):
-    """Backward sweep.  Returns s (ns,), v (nv,), U (n_days + 1, ns, nv) with U[d] = price at tau = d days."""
+def quantlib_days(tau_days, trading_days_per_year=252):
+    """Calendar days QuantLib actually prices for a maturity of tau trading days.
+    Utils._American_Option_Heston sets exerciseDate = today + round(T * 365) days with Actual365Fixed and
+    T = max(tau, 1) / trading_days_per_year.  So the table's maturity is round(tau * 365 / 252) / 365 years,
+    not tau / 252 (e.g. 1 trading day is priced as 1 calendar day = 1/365)."""
+    return int(round(max(tau_days, 1) / trading_days_per_year * 365))
+
+
+def solve_surface(kappa, theta, xi, rho, r, q, n_days, days_per_year=252, grid: ADIGrid = ADIGrid(),
+                  record_days=None):
+    """Backward sweep.  Returns s (ns,), v (nv,), U (n_days + 1, ns, nv) with U[d] = price at tau = d days.
+
+    record_days (optional, increasing ints): instead record U after record_days[d-1] steps of size
+    1 / days_per_year (e.g. calendar days with days_per_year = 365, as QuantLib prices)."""
+    if record_days is not None:
+        n_days = len(record_days)
     s, v = s_grid(grid), v_grid(grid)
     ns, nv = len(s), len(v)
     A0, A1, A2 = build_operators(s, v, kappa, theta, xi, rho, r, q)
@@ -156,8 +170,12 @@ def solve_surface(kappa, theta, xi, rho, r, q, n_days, days_per_year=252, grid: 
         lam = np.maximum(0.0, lam + (g - Ubar) / h)
         return Unew, lam
 
+    marks = list(record_days) if record_days is not None else list(range(1, n_days + 1))
+    day = 0
     for d in range(1, n_days + 1):
-        for k in range(grid.steps_per_day):
+        n_steps = (marks[d - 1] - day) * grid.steps_per_day
+        day = marks[d - 1]
+        for k in range(n_steps):
             if d == 1 and k == 0:
                 for _ in range(2):
                     Ubar = luE.solve(U + 0.5 * dt * lam)
@@ -187,14 +205,20 @@ def _delta_gamma(s, U):
     return De, Ga
 
 
-def build_table_adi(cfg, grid: ADIGrid = ADIGrid(), verbose=True):
-    """Same output format as heston_table.build_table (taus, log_m, vols, values (n_tau, 4, n_m, n_vol))."""
+def build_table_adi(cfg, grid: ADIGrid = ADIGrid(), verbose=True, quantlib_maturity=True):
+    """Same output format as heston_table.build_table (taus, log_m, vols, values (n_tau, 4, n_m, n_vol)).
+    quantlib_maturity=True prices tau trading days as QuantLib does (round(tau * 365 / 252) calendar days /
+    365, see quantlib_days), so the table matches the current one; False uses tau / 252 exactly."""
     from environment.heston_table import log_m_grid, vol_grid
 
     t0 = time.time()
     n_days = cfg.max_ttm
     kw = dict(kappa=cfg.kappa, xi=cfg.volvol, rho=cfg.rho, r=cfg.r, q=cfg.q, n_days=n_days,
               days_per_year=cfg.TradingDaysPerYear, grid=grid)
+    if quantlib_maturity:
+        cal = [quantlib_days(t, cfg.TradingDaysPerYear) for t in range(1, n_days + 1)]
+        assert all(b >= a for a, b in zip(cal, cal[1:]))
+        kw.update(days_per_year=365, record_days=cal)
     h = cfg.vega_h
     sq = np.sqrt(cfg.theta)
     s, v, U = solve_surface(theta=cfg.theta, **kw)
