@@ -138,6 +138,12 @@ def get_args(argv=None):
                    "quantile levels within +-var_smooth of 5%% (0 = one quantile)")
     g.add_argument("--dqda_clip", type=float, default=1.0)
     g.add_argument("--rule_obs", action="store_true", help="state + [n_G, n_V] (the rule's inputs)")
+    g.add_argument("--critic_type", choices=["quantile", "mean"], default="quantile",
+                   help="mean: scalar critic with the expected kernel target (pre-commitment / --train_obj mean only)")
+    g.add_argument("--critic_huber", type=float, default=0.0, help="mean critic: Huber delta (0 = MSE)")
+    g.add_argument("--precommit_kappa", type=float, default=0.0,
+                   help="smoothed hinge g(W) = -kappa softplus(-(W + b) / kappa) (0 = min(W + b, 0))")
+    g.add_argument("--rule_frac_obs", action="store_true", help="state + rule (b)'s hedge fraction (needs --warm_rule)")
     g.add_argument("--precommit_b", type=float, default=None,
                    help="pre-commitment objective (Rockafellar-Uryasev / Bauerle-Ott): state + accumulated P&L W_t, "
                         "reward shaped to g(W_{t+1}) - g(W_t) with g(W) = min(W + b, 0), so the return is "
@@ -175,6 +181,8 @@ def get_args(argv=None):
     HedgingEnv.extra_obs = bool(a.extra_obs)
     HedgingEnv.band = float(a.band)
     HedgingEnv.rule_obs = bool(a.rule_obs)
+    HedgingEnv.rule_frac = (tuple(float(x) for x in a.warm_rule.split(",")) if getattr(a, "rule_frac_obs", False)
+                            else None)
     HedgingEnv.pnl_obs = a.precommit_b is not None
     if a.vega_obs is None:
         a.vega_obs = a.process == "Heston"
@@ -311,6 +319,9 @@ def _main(a):
         kernel = HestonKernel(u, train_m, c_book, a.vega_obs, m_x=a.kernel_mx, extra_obs=a.extra_obs,
                               atm_fix=a.kernel_atm_fix)
         agent_cls, extra_kw = D4PGKernel, dict(n_nodes=kernel.M)
+        if a.critic_type == "mean":
+            from torch_d4pg.agent_kernel import D4PGKernelMean
+            agent_cls, extra_kw = D4PGKernelMean, dict(n_nodes=kernel.M, critic_huber=a.critic_huber)
         print(f"kernel target: {kernel.M} nodes, liability scale {kernel.L}")
     agent = agent_cls(env.obs_dim, **extra_kw, obj_func=a.train_obj or a.obj_func, threshold=a.threshold, std_coef=a.std_coef, seed=a.seed,
                    actor_sizes=a.actor_sizes, critic_sizes=a.critic_sizes, lr=a.lr, batch_size=a.batch_size,
@@ -338,6 +349,9 @@ def _main(a):
     timing = dict(env=0.0, kernel=0.0, learn=0.0, validation=0.0)
     K = a.n_envs
     gpc = (lambda W: np.minimum(W + a.precommit_b, 0.0)) if a.precommit_b is not None else None
+    if a.precommit_b is not None and a.precommit_kappa > 0:
+        kap = a.precommit_kappa
+        gpc = lambda W: -kap * np.logaddexp(0.0, -(W + a.precommit_b) / kap)
     for ep in range(K - 1, a.train_episodes, K):  # ep = index of the last episode of this batch of K paths
         agent.train_actor = ep >= a.actor_freeze_episodes
         if a.noise_mode == "pre":

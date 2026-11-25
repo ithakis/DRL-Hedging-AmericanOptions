@@ -116,3 +116,90 @@ class D4PGKernel(D4PGQR):
         self.critic.zero_grad(set_to_none=True)
         self.last_losses = (float(critic_loss.detach()), float(actor_loss.detach()))
         self._after_step()
+
+
+class MeanCritic(torch.nn.Module):
+    """Scalar critic Q(s, a) = E[return] with the QuantileCritic interface (one output, quantile 0.5, prob 1), so that
+    RiskObjective('mean') and the actor update are unchanged. Only valid for a mean objective (pre-commitment)."""
+
+    def __init__(self, obs_dim, sizes, norm, activation):
+        super().__init__()
+        from .networks import LayerNormMLP, _truncated_normal_fan_in_
+        self.norm_in = norm
+        self.register_buffer("quantiles", torch.tensor([0.5], dtype=torch.float32))
+        self.register_buffer("probs", torch.tensor([1.0], dtype=torch.float32))
+        self.body = LayerNormMLP(obs_dim + 1, sizes, activation)
+        self.head = torch.nn.Linear(self.body.out_dim, 1)
+        _truncated_normal_fan_in_(self.head.weight, 1.0)
+        torch.nn.init.zeros_(self.head.bias)
+
+    def forward(self, obs, action):
+        return self.head(self.body(torch.cat([self.norm_in(obs), action], dim=-1)))
+
+
+class D4PGKernelMean(D4PGKernel):
+    """Swing-style learner for the pre-commitment (mean) objective: scalar critic, expected kernel target
+        y = sum_j w_j (r_j + (1 - d) Q_target(s'_j, pi_target(s'_j))),  loss = MSE (or Huber with --critic_huber)
+    Everything else (actor update, EMA, Polyak, replay, warm-up) is inherited from D4PGKernel."""
+
+    def __init__(self, obs_dim, n_nodes, critic_huber=0.0, **kw):
+        import copy
+        from .distributional import RiskObjective
+        from .networks import ObsNormalizer
+        super().__init__(obs_dim, n_nodes, **kw)
+        assert self.cfg["obj_func"] == "mean", "scalar critic needs --train_obj mean"
+        c = self.cfg
+        self.critic = MeanCritic(obs_dim, c["critic_sizes"], ObsNormalizer(obs_dim, c["obs_center"], c["obs_scale"],
+                                                                           c["obs_clip"]), c["activation"])
+        self.critic_target = copy.deepcopy(self.critic)
+        for p in self.critic_target.parameters():
+            p.requires_grad_(False)
+        self.critic_opt = torch.optim.Adam(self.critic.parameters(), lr=c["lr"], eps=1e-8)
+        self.objective = RiskObjective("mean", self.critic.quantiles, self.critic.probs)
+        self.cfg["critic_type"] = "mean"
+        self.cfg["critic_huber"] = float(critic_huber)
+
+    def learn(self):
+        if self.cfg["tau"] > 0:
+            if self.learner_steps == 0:
+                self._hard_update()
+        elif self.learner_steps % self.cfg["target_update_period"] == 0:
+            self._hard_update()
+        self.learner_steps += 1
+        o, a, r, o1, o1_real, d, w = self.kmem.sample(self.cfg["batch_size"])
+        B, M, D = o1.shape
+        with torch.no_grad():
+            flat = o1.reshape(B * M, D)
+            q_next = self.critic_target(flat, self.actor_target(flat)).reshape(B, M)
+            y = (w * (r + (1.0 - d)[:, None] * q_next)).sum(1, keepdim=True)
+        q = self.critic(o, a)
+        hub = self.cfg["critic_huber"]
+        critic_loss = (torch.nn.functional.huber_loss(q, y, delta=hub) if hub > 0
+                       else 0.5 * (q - y).pow(2).mean())
+        self.critic_opt.zero_grad(set_to_none=True)
+        critic_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.critic.parameters(), self.cfg["clip_norm"])
+        self.critic_opt.step()
+        if not self.train_actor:
+            self.last_losses = (float(critic_loss.detach()), np.nan)
+            self._after_step()
+            return
+        o_t = o if self.cfg["actor_on_current"] else o1_real
+        act = self.actor(o_t)
+        a_det = act.detach().requires_grad_(True)
+        qa = self.objective(self.critic(o_t, a_det))
+        dqda = torch.autograd.grad(qa.sum(), a_det)[0]
+        cl = self.cfg["dqda_clip"]
+        dqda = dqda.clamp(-cl, cl)
+        dqda = dqda * torch.clamp(cl / dqda.norm(dim=-1, keepdim=True).clamp_min(1e-12), max=1.0)
+        target = (act + dqda).detach()
+        actor_loss = (0.5 * (target - act).pow(2).sum(-1)).mean()
+        if self.cfg["residual_l2"] > 0:
+            actor_loss = actor_loss + self.cfg["residual_l2"] * (0.5 * act.pow(2).sum(-1)).mean()
+        self.actor_opt.zero_grad(set_to_none=True)
+        actor_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.cfg["clip_norm"])
+        self.actor_opt.step()
+        self.critic.zero_grad(set_to_none=True)
+        self.last_losses = (float(critic_loss.detach()), float(actor_loss.detach()))
+        self._after_step()

@@ -24,11 +24,25 @@ def neutral_amounts(G, gh, V, vh):
     return ng, nv
 
 
+def rule_frac_from(G, gh, V, vh, rule):
+    """Rule (b)'s trade as a hedge fraction, from the state columns only (same as ResidualRuleEnv.rule_fraction up to
+    the inf handling of a zero hedge gamma). Used as an extra state input (--rule_frac_obs), here and in the kernel."""
+    a_, b_, w_ = rule
+    n_g, n_v = neutral_amounts(G, gh, V, vh)
+    lo, hi = np.minimum(0.0, np.minimum(n_g, n_v)), np.maximum(0.0, np.maximum(n_g, n_v))
+    x = np.clip(a_ * n_g + b_ * n_v, lo, hi)
+    x = np.where(np.abs(x) < w_, 0.0, x)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        f = np.where(hi > lo, (x - lo) / (hi - lo), 0.0)
+    return np.clip(np.nan_to_num(f, nan=0.0), 0.0, 1.0)
+
+
 class HedgingEnv:
     extra_obs = False  # class switch (batch B): append [time left t/T, volatility V_t] to the state
     band = 0.0  # class switch: no option trade when |contracts| < band (the no-trade band of rule (b))
     rule_obs = False  # class switch: append n_G = -Gamma/gamma^h and n_V = -Vega/vega^h (the rule's inputs)
     pnl_obs = False  # class switch: append the accumulated episode P&L W_t (last column; pre-commitment objective)
+    rule_frac = None  # class switch: (a, b, w) -> append rule (b)'s hedge fraction (before W_t)
 
     def __init__(self, market, spread: float, vega_obs: bool):
         self.m = market
@@ -37,7 +51,7 @@ class HedgingEnv:
         self.P, self.T1 = market["S"].shape
         self.T = self.T1 - 1  # number of hedging steps per episode
         self.obs_dim = ((5 if vega_obs else 3) + (2 if HedgingEnv.extra_obs else 0) + (2 if HedgingEnv.rule_obs else 0)
-                        + (1 if HedgingEnv.pnl_obs else 0))
+                        + (1 if HedgingEnv.pnl_obs else 0) + (1 if HedgingEnv.rule_frac is not None else 0))
 
     # ------------------------------------------------------------------
     def reset(self, idx):
@@ -69,6 +83,8 @@ class HedgingEnv:
             cols += [np.full(self.B, 1.0 - t / self.T), b["V"][:, t]]
         if HedgingEnv.rule_obs:
             cols += list(neutral_amounts(cols[1], cols[2], cols[3], cols[4]))
+        if HedgingEnv.rule_frac is not None:
+            cols += [rule_frac_from(cols[1], cols[2], cols[3], cols[4], HedgingEnv.rule_frac)]
         if HedgingEnv.pnl_obs:
             cols += [self.W.copy()]
         obs = np.stack(cols, axis=1)
