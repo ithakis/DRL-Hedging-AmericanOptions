@@ -49,6 +49,66 @@ def _qh_kernel(z_pred, z_t, tau, k):
     return loss, grad
 
 
+@njit(cache=True, fastmath=False, parallel=True)
+def _qh_kernel_sorted(z_pred, z_t, tau, k):
+    """Same loss and gradient as _qh_kernel, in O((N + N') log N') per row instead of O(N N').
+
+    For one online value zp, the targets split into 4 groups by d = t - zp:  t < zp - k (linear, w = 1 - tau),
+    zp - k <= t < zp (quadratic, w = 1 - tau), zp <= t < zp + k (quadratic, w = tau), t >= zp + k (linear, w = tau).
+    (At |d| = k the quadratic and linear pieces agree in value and slope, and d = 0 adds nothing, so the
+    tie side does not matter.)  With the targets sorted and prefix sums of 1, t, t^2, each group's sum
+    of losses and of d/dzp is closed form.  float64 accumulation on values centred at the row mean."""
+    B, N = z_pred.shape
+    Nt = z_t.shape[1]
+    loss = np.zeros(B, dtype=np.float32)
+    grad = np.zeros((B, N), dtype=np.float32)
+    scale = 1.0 / (k * Nt * N)
+    for b in prange(B):
+        c = 0.0
+        for i in range(Nt):
+            c += z_t[b, i]
+        c /= Nt
+        t = np.empty(Nt, dtype=np.float64)
+        for i in range(Nt):
+            t[i] = z_t[b, i] - c
+        t.sort()
+        S1 = np.zeros(Nt + 1)
+        S2 = np.zeros(Nt + 1)
+        for i in range(Nt):
+            S1[i + 1] = S1[i] + t[i]
+            S2[i + 1] = S2[i] + t[i] * t[i]
+        acc = 0.0
+        for j in range(N):
+            zp = z_pred[b, j] - c
+            tj = tau[j]
+            i1 = np.searchsorted(t, zp - k)   # t < zp - k
+            i2 = np.searchsorted(t, zp)       # t < zp
+            i3 = np.searchsorted(t, zp + k)   # t < zp + k
+            # A: linear, d < -k
+            nA, s1A = i1, S1[i1]
+            lA = k * (nA * (zp - 0.5 * k) - s1A)
+            gA = k * nA
+            # B: quadratic, -k <= d < 0
+            nB, s1B, s2B = i2 - i1, S1[i2] - S1[i1], S2[i2] - S2[i1]
+            lB = 0.5 * (s2B - 2.0 * zp * s1B + nB * zp * zp)
+            gB = nB * zp - s1B
+            # C: quadratic, 0 <= d < k
+            nC, s1C, s2C = i3 - i2, S1[i3] - S1[i2], S2[i3] - S2[i2]
+            lC = 0.5 * (s2C - 2.0 * zp * s1C + nC * zp * zp)
+            gC = nC * zp - s1C
+            # D: linear, d >= k
+            nD, s1D = Nt - i3, S1[Nt] - S1[i3]
+            lD = k * (s1D - nD * (zp + 0.5 * k))
+            gD = -k * nD
+            acc += (1.0 - tj) * (lA + lB) + tj * (lC + lD)
+            grad[b, j] = ((1.0 - tj) * (gA + gB) + tj * (gC + gD)) * scale
+        loss[b] = acc * scale
+    return loss, grad
+
+
+FAST_LOSS = True  # module switch: False = the original O(N N') kernel
+
+
 class _QuantileHuber(torch.autograd.Function):
     """Fused forward/backward of quantile_huber_loss_reference (numba kernel, same values).
 
@@ -58,8 +118,8 @@ class _QuantileHuber(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, z_pred, z_t, quantiles, k):
-        loss, grad = _qh_kernel(z_pred.detach().numpy(), z_t.detach().numpy(),
-                                quantiles.detach().numpy(), k)
+        f = _qh_kernel_sorted if FAST_LOSS else _qh_kernel
+        loss, grad = f(z_pred.detach().numpy(), z_t.detach().numpy(), quantiles.detach().numpy(), k)
         ctx.save_for_backward(torch.from_numpy(grad))
         return torch.from_numpy(loss)
 

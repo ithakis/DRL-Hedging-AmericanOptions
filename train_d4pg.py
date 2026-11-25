@@ -160,6 +160,8 @@ def get_args(argv=None):
     g = ap.add_argument_group("speed")
     g.add_argument("--fast_table", type=int, default=1,
                    help="1 = vectorised bicubic table lookup (same values as SciPy up to rounding); 0 = SciPy loop")
+    g.add_argument("--fast_loss", type=int, default=1,
+                   help="1 = sorted/prefix-sum quantile-Huber loss (same loss and gradient, O(N log N)); 0 = original O(N^2)")
     g.add_argument("--profile", default=None, help="write a cProfile of the run to this file (.prof)")
     g.add_argument("--val_at_start", action="store_true",
                    help="also validate the untrained policy (episode 0, = the rule when --warm_rule); "
@@ -275,6 +277,8 @@ def main(argv=None):
 def _main(a):
     from environment.heston_table import HestonAmericanPutTable
     HestonAmericanPutTable.fast = bool(a.fast_table)
+    import torch_d4pg.distributional as _dist
+    _dist.FAST_LOSS = bool(a.fast_loss)
     torch.set_num_threads(a.torch_threads)
     out = Path(a.out) / a.run_name
     out.mkdir(parents=True, exist_ok=True)
