@@ -392,6 +392,7 @@ class Utils:
             "hed_ttm": self.hed_ttm,
             "hed_type": self.hed_type,
             "init_vol": self.init_vol,
+            **({"init_vol_range": list(self.init_vol_range)} if getattr(self, "init_vol_range", None) else {}),
             "kappa": self.kappa,
             "theta": self.theta,
             "volvol": self.volvol,
@@ -586,6 +587,10 @@ class Utils:
         # -- 1. Unpack model inputs ----------------------------------------------
         S0   = self.S0
         V0   = self.init_vol**2
+        rng_iv = getattr(self, "init_vol_range", None)
+        if rng_iv:  # domain randomisation: per-path initial vol, log-uniform; own RNG (global stream unchanged)
+            g = np.random.default_rng(int(self.seed) + 99991)
+            V0 = np.exp(g.uniform(np.log(rng_iv[0]), np.log(rng_iv[1]), self.num_sim)) ** 2
         r,mu,q  = self.r, self.mu, self.q
         kappa_Q, theta_Q = self.kappa, self.theta
         xi,rho = self.volvol, self.rho

@@ -139,6 +139,9 @@ def get_args(argv=None):
     g.add_argument("--dqda_clip", type=float, default=1.0)
     g.add_argument("--dqda_norm", action="store_true", help="divide dQ/da by an EMA of its batch mean |.| before the clip")
     g.add_argument("--squash", type=float, default=1.0, help="actor output tanh(squash * preact)")
+    g.add_argument("--train_init_vol_range", type=str, default=None,
+                   help="'lo,hi': TRAINING paths start at a per-path initial vol, log-uniform on [lo, hi] "
+                        "(validation/test keep --init_vol)")
     g.add_argument("--precommit_cap", type=float, default=0.0,
                    help="ramp loss: g floored at -cap (losses beyond b + cap give no gradient); 0 = off")
     g.add_argument("--precommit_b_range", type=str, default=None,
@@ -224,6 +227,8 @@ def make_utils(a, seed, n_paths):
 def get_market(a, seed, n):
     # spread does not change the market arrays; build with spread 0 so all costs share one cache
     u = make_utils(argparse.Namespace(**{**vars(a), "spread": 0.0}), seed, n)
+    if getattr(a, "train_init_vol_range", None) and seed == a.market_seed:
+        u.init_vol_range = tuple(float(x) for x in a.train_init_vol_range.split(","))
     return load_or_build_market(u, a.market_dir)
 
 
@@ -330,6 +335,8 @@ def _main(a):
         from torch_d4pg.heston_kernel import HestonKernel, book_arrivals
         u = make_utils(argparse.Namespace(**{**vars(a), "spread": 0.0}), a.market_seed, a.n_train_paths)
         u.table_dir = a.table_dir
+        if a.train_init_vol_range:
+            u.init_vol_range = tuple(float(x) for x in a.train_init_vol_range.split(","))
         _, _, c_book = book_arrivals(u)
         kernel = HestonKernel(u, train_m, c_book, a.vega_obs, m_x=a.kernel_mx, extra_obs=a.extra_obs,
                               atm_fix=a.kernel_atm_fix, arrivals=a.kernel_arrivals > 0)
