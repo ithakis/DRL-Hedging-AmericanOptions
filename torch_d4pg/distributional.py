@@ -106,6 +106,83 @@ def _qh_kernel_sorted(z_pred, z_t, tau, k):
     return loss, grad
 
 
+@njit(cache=True, fastmath=False, parallel=True)
+def _qh_kernel_weighted(z_pred, z_t, wt, tau, k):
+    """Weighted-target version of _qh_kernel_sorted for the density (kernel) critic target:
+    loss[b] = 1/(k N) sum_i wt[b,i] sum_j |tau_j - 1[d<0]| huber_k(d),  d = z_t[b,i] - z_pred[b,j],
+    with all M x N' node targets of one transition in one row (wt = node weight / N').  Equals
+    sum_m w_m * _qh_kernel(z_pred, z_t[node m]) without repeating z_pred M times."""
+    B, N = z_pred.shape
+    Nt = z_t.shape[1]
+    loss = np.zeros(B, dtype=np.float32)
+    grad = np.zeros((B, N), dtype=np.float32)
+    scale = 1.0 / (k * N)
+    for b in prange(B):
+        c = 0.0
+        for i in range(Nt):
+            c += z_t[b, i]
+        c /= Nt
+        t = np.empty(Nt, dtype=np.float64)
+        for i in range(Nt):
+            t[i] = z_t[b, i] - c
+        order = np.argsort(t)
+        ts = t[order]
+        W0 = np.zeros(Nt + 1)
+        W1 = np.zeros(Nt + 1)
+        W2 = np.zeros(Nt + 1)
+        for i in range(Nt):
+            w = wt[b, order[i]]
+            W0[i + 1] = W0[i] + w
+            W1[i + 1] = W1[i] + w * ts[i]
+            W2[i + 1] = W2[i] + w * ts[i] * ts[i]
+        acc = 0.0
+        for j in range(N):
+            zp = z_pred[b, j] - c
+            tj = tau[j]
+            i1 = np.searchsorted(ts, zp - k)
+            i2 = np.searchsorted(ts, zp)
+            i3 = np.searchsorted(ts, zp + k)
+            nA, s1A = W0[i1], W1[i1]
+            lA = k * (nA * (zp - 0.5 * k) - s1A)
+            gA = k * nA
+            nB, s1B, s2B = W0[i2] - W0[i1], W1[i2] - W1[i1], W2[i2] - W2[i1]
+            lB = 0.5 * (s2B - 2.0 * zp * s1B + nB * zp * zp)
+            gB = nB * zp - s1B
+            nC, s1C, s2C = W0[i3] - W0[i2], W1[i3] - W1[i2], W2[i3] - W2[i2]
+            lC = 0.5 * (s2C - 2.0 * zp * s1C + nC * zp * zp)
+            gC = nC * zp - s1C
+            nD, s1D = W0[Nt] - W0[i3], W1[Nt] - W1[i3]
+            lD = k * (s1D - nD * (zp + 0.5 * k))
+            gD = -k * nD
+            acc += (1.0 - tj) * (lA + lB) + tj * (lC + lD)
+            grad[b, j] = ((1.0 - tj) * (gA + gB) + tj * (gC + gD)) * scale
+        loss[b] = acc * scale
+    return loss, grad
+
+
+class _QuantileHuberWeighted(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, z_pred, z_t, wt, quantiles, k):
+        loss, grad = _qh_kernel_weighted(z_pred.detach().numpy(), z_t.detach().numpy(),
+                                         wt.detach().numpy().astype(np.float64), quantiles.detach().numpy(), k)
+        ctx.save_for_backward(torch.from_numpy(grad))
+        return torch.from_numpy(loss)
+
+    @staticmethod
+    def backward(ctx, g):
+        (grad,) = ctx.saved_tensors
+        return grad * g.unsqueeze(-1), None, None, None, None
+
+
+def quantile_huber_loss_mixture(z_pred, quantiles, r, d, z_next, w, k: float = 1.0):
+    """Density target: z_pred (B, N), r (B, M), d (B,), z_next (B, M, N'), node weights w (B, M)
+    -> per-sample loss (B,) = sum_m w_m * quantile_huber_loss(z_pred, r_m + d z_next_m)."""
+    B, M, Nt = z_next.shape
+    z_t = (r.unsqueeze(-1) + d.reshape(B, 1, 1) * z_next).detach().reshape(B, M * Nt)
+    wt = (w / Nt).unsqueeze(-1).expand(B, M, Nt).reshape(B, M * Nt)
+    return _QuantileHuberWeighted.apply(z_pred, z_t, wt, quantiles, float(k))
+
+
 FAST_LOSS = True  # module switch: False = the original O(N N') kernel
 
 
