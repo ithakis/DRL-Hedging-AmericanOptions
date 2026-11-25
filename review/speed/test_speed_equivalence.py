@@ -60,6 +60,25 @@ def main():
     ap.add_argument("--skip_kernel", action="store_true")
     a = ap.parse_args()
 
+    # ---------------------------------------------------------------- 0. quantile-Huber loss
+    from torch_d4pg.distributional import _qh_kernel, _qh_kernel_sorted
+    rng0 = np.random.default_rng(1)
+    tau = np.linspace(0.01, 0.99, 99).astype(np.float32)
+    for spread_, kk in ((0.3, 1.0), (3.0, 1.0), (30.0, 1.0), (3.0, 0.1)):
+        zp = (30 + spread_ * rng0.standard_normal((2304, 99))).astype(np.float32)
+        zt = (30 + spread_ * rng0.standard_normal((2304, 99))).astype(np.float32)
+        zt[:, :5] = zp[:, :5]  # exact ties (d = 0)
+        zt[:, 5:8] = zp[:, 5:8] + kk  # ties at |d| = k
+        l0, g0 = _qh_kernel(zp, zt, tau, kk)
+        l1, g1 = _qh_kernel_sorted(zp, zt, tau, kk)
+        el = np.abs(l1 - l0).max() / np.abs(l0).max()
+        eg = np.abs(g1 - g0).max() / np.abs(g0).max()
+        print(f"[loss] spread {spread_}, k {kk}: max rel diff loss {el:.1e}, grad {eg:.1e}")
+        assert el < 1e-5 and eg < 1e-5, "fast loss differs"
+    t_old = timeit(lambda: _qh_kernel(zp, zt, tau, 1.0), 5)
+    t_new = timeit(lambda: _qh_kernel_sorted(zp, zt, tau, 1.0), 5)
+    print(f"[loss] 2304 x 99 x 99: original {1e3 * t_old:.1f} ms, sorted {1e3 * t_new:.1f} ms -> {t_old / t_new:.1f}x")
+
     # ---------------------------------------------------------------- 1. table
     from review.retrain.settings import train_args
     import train_d4pg as T
