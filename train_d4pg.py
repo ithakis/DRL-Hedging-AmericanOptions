@@ -139,6 +139,11 @@ def get_args(argv=None):
     g.add_argument("--dqda_clip", type=float, default=1.0)
     g.add_argument("--dqda_norm", action="store_true", help="divide dQ/da by an EMA of its batch mean |.| before the clip")
     g.add_argument("--squash", type=float, default=1.0, help="actor output tanh(squash * preact)")
+    g.add_argument("--precommit_cap", type=float, default=0.0,
+                   help="ramp loss: g floored at -cap (losses beyond b + cap give no gradient); 0 = off")
+    g.add_argument("--precommit_b_range", type=str, default=None,
+                   help="all-b policy: 'lo,hi' (P&L units); each training path draws b ~ U[lo, hi] and the state holds "
+                        "y = W + b; validation/test use b = --precommit_b")
     g.add_argument("--precommit_lambda", type=float, default=0.0, help="g(W) = hinge + lambda W (mean-P&L blend)")
     g.add_argument("--rule_obs", action="store_true", help="state + [n_G, n_V] (the rule's inputs)")
     g.add_argument("--critic_type", choices=["quantile", "mean"], default="quantile",
@@ -190,6 +195,7 @@ def get_args(argv=None):
     HedgingEnv.rule_frac = (tuple(float(x) for x in a.warm_rule.split(",")) if getattr(a, "rule_frac_obs", False)
                             else None)
     HedgingEnv.pnl_obs = a.precommit_b is not None
+    HedgingEnv.pnl_offset = float(a.precommit_b) if a.precommit_b_range else 0.0
     if a.vega_obs is None:
         a.vega_obs = a.process == "Heston"
     if a.n_train_paths is None:
@@ -312,6 +318,9 @@ def _main(a):
     center = scale = None
     if a.obs_norm == "robust":
         center, scale = obs_stats(train_m, a.spread, a.vega_obs, seed=a.market_seed)
+        if a.precommit_b_range:  # obs_stats ran with b_off = pnl_offset; centre y on the middle of the b range
+            lo_b, hi_b = (float(x) for x in a.precommit_b_range.split(","))
+            center[-1] += 0.5 * (lo_b + hi_b) - HedgingEnv.pnl_offset
         print("obs median", np.round(center, 4), "IQR", np.round(scale, 4))
     kernel = None
     agent_cls, extra_kw = D4PGQR, {}
@@ -363,19 +372,29 @@ def _main(a):
     tic = time.time()
     timing = dict(env=0.0, kernel=0.0, learn=0.0, validation=0.0)
     K = a.n_envs
-    gpc = (lambda W: np.minimum(W + a.precommit_b, 0.0)) if a.precommit_b is not None else None
-    if a.precommit_b is not None and a.precommit_kappa > 0:
-        kap = a.precommit_kappa
-        gpc = lambda W: -kap * np.logaddexp(0.0, -(W + a.precommit_b) / kap)
-    if a.precommit_b is not None and a.precommit_lambda > 0:
-        _g0, lam = gpc, a.precommit_lambda
-        gpc = lambda W: _g0(W) + lam * W
+    def gfun(W, b):
+        """Pre-commitment terminal utility, telescoped into rewards: hinge min(W + b, 0) (softplus with kappa),
+        floored at -cap (ramp), plus lambda W (mean blend)."""
+        if a.precommit_kappa > 0:
+            h = -a.precommit_kappa * np.logaddexp(0.0, -(W + b) / a.precommit_kappa)
+        else:
+            h = np.minimum(W + b, 0.0)
+        if a.precommit_cap > 0:
+            h = np.maximum(h, -a.precommit_cap)
+        return h + a.precommit_lambda * W if a.precommit_lambda > 0 else h
+    b_rng = [float(x) for x in a.precommit_b_range.split(",")] if a.precommit_b_range else None
+    rng_b = np.random.default_rng(a.seed + 777)
     for ep in range(K - 1, a.train_episodes, K):  # ep = index of the last episode of this batch of K paths
         agent.train_actor = ep >= a.actor_freeze_episodes
         if a.noise_mode == "pre":
             agent.noise_mode = "pre"
             agent.sigma_now = a.sigma + (a.sigma_floor - a.sigma) * min(1.0, ep / max(1, a.train_episodes))
         obs = env.reset(np.arange(ep - K + 1, ep + 1) % env.P)
+        bvec = None if a.precommit_b is None else np.full(K, float(a.precommit_b))
+        if b_rng is not None:
+            bvec = rng_b.uniform(b_rng[0], b_rng[1], K)
+            obs[:, -1] += bvec - env.b_off
+            env.b_off = bvec.copy()
         done, tot = False, np.zeros(K)
         paths = np.arange(ep - K + 1, ep + 1) % env.P
         while not done:
@@ -385,7 +404,7 @@ def _main(a):
             _t = time.perf_counter()
             next_obs, r, done, x = env.step(agent.to_env_action(u))
             timing["env"] += time.perf_counter() - _t
-            r_train = r if a.precommit_b is None else gpc(W0 + r) - gpc(W0)
+            r_train = r if a.precommit_b is None else gfun(W0 + r, bvec) - gfun(W0, bvec)
             if kernel is not None:
                 cost = -np.abs(a.spread * x * env.b["h_price"][:, t_now, t_now])
                 _t = time.perf_counter()
@@ -393,8 +412,9 @@ def _main(a):
                 timing["kernel"] += time.perf_counter() - _t
                 if a.precommit_b is not None:
                     W1 = W0[:, None] + rk
-                    ok = np.concatenate([ok, np.where(done, 0.0, W1)[..., None]], axis=-1)
-                    rk = gpc(W1) - gpc(W0)[:, None]
+                    y1 = W1 + (env.b_off[:, None] if b_rng is not None else 0.0)
+                    ok = np.concatenate([ok, np.where(done, 0.0, y1)[..., None]], axis=-1)
+                    rk = gfun(W1, bvec[:, None]) - gfun(W0, bvec)[:, None]
                 _t = time.perf_counter()
                 ga = va = None
                 if a.kernel_arrivals > 0:

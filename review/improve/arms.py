@@ -25,6 +25,8 @@ ARMS = {
     "sq05": ["--squash", "0.5"],
     # batch 3
     "arr2": ["--kernel_arrivals", "2"],
+    "allb": ["BRANGE", "0.3,0.9"],     # all-b policy, b ~ U[0.3, 0.9] x rule VaR, evaluated at 0.6
+    "ramp": ["CAPF", "1.25"],          # hinge floored at -(1.25 x rule VaR - b)
 }
 
 
@@ -32,9 +34,13 @@ def lines(arms, seeds, costs, out, episodes):
     for s in seeds:  # seed-major order: a stopped screen still has complete paired comparisons
         for arm in arms:
             extra = list(ARMS[arm])
-            bf, bandf = 0.6, 1.0
+            bf, bandf, brange, capf = 0.6, 1.0, None, None
             if "BF" in extra:
                 i = extra.index("BF"); bf = float(extra[i + 1]); del extra[i:i + 2]
+            if "BRANGE" in extra:
+                i = extra.index("BRANGE"); brange = [float(x) for x in extra[i + 1].split(",")]; del extra[i:i + 2]
+            if "CAPF" in extra:
+                i = extra.index("CAPF"); capf = float(extra[i + 1]); del extra[i:i + 2]
             if "BANDF" in extra:
                 i = extra.index("BANDF"); bandf = float(extra[i + 1]); del extra[i:i + 2]
             for c in costs:
@@ -54,6 +60,10 @@ def lines(arms, seeds, costs, out, episodes):
                          "--lr", "6e-4", "--actor_lr", "3e-4", "--ema_decay", "0.999", "--tau", "0.003",
                          "--noise_mode", "pre", "--sigma", "1.0", "--sigma_floor", "0.2",
                          "--train_obj", "mean", "--precommit_b", f"{round(bf * rb['VaR95'], 2)}"] + extra
+                if brange:
+                    args += ["--precommit_b_range", f"{brange[0] * rb['VaR95']:.2f},{brange[1] * rb['VaR95']:.2f}"]
+                if capf:
+                    args += ["--precommit_cap", f"{(capf - bf) * rb['VaR95']:.2f}"]
                 print(name + " " + " ".join(args))
 
 

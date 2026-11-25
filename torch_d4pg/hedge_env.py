@@ -42,6 +42,7 @@ class HedgingEnv:
     band = 0.0  # class switch: no option trade when |contracts| < band (the no-trade band of rule (b))
     rule_obs = False  # class switch: append n_G = -Gamma/gamma^h and n_V = -Vega/vega^h (the rule's inputs)
     pnl_obs = False  # class switch: append the accumulated episode P&L W_t (last column; pre-commitment objective)
+    pnl_offset = 0.0  # all-b policy: the W column holds y = W + b_off; b_off defaults to this (the evaluation b)
     rule_frac = None  # class switch: (a, b, w) -> append rule (b)'s hedge fraction (before W_t)
 
     def __init__(self, market, spread: float, vega_obs: bool):
@@ -64,6 +65,7 @@ class HedgingEnv:
         self.t = 0
         self.pos_prev = np.zeros(self.B)
         self.W = np.zeros(self.B)  # accumulated P&L of the episode so far
+        self.b_off = np.full(self.B, float(HedgingEnv.pnl_offset))
         return self._obs()
 
     def _port(self, t):
@@ -86,7 +88,7 @@ class HedgingEnv:
         if HedgingEnv.rule_frac is not None:
             cols += [rule_frac_from(cols[1], cols[2], cols[3], cols[4], HedgingEnv.rule_frac)]
         if HedgingEnv.pnl_obs:
-            cols += [self.W.copy()]
+            cols += [self.W + self.b_off]
         obs = np.stack(cols, axis=1)
         if t == self.T:
             obs[:, 1:] = 0.0

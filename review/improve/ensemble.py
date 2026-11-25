@@ -56,6 +56,7 @@ def main():
         HedgingEnv.rule_obs = bool(cfg.get("rule_obs"))
         HedgingEnv.band = float(cfg.get("band") or 0.0)
         HedgingEnv.pnl_obs = cfg.get("precommit_b") is not None
+        HedgingEnv.pnl_offset = float(cfg["precommit_b"]) if cfg.get("precommit_b_range") else 0.0
         HedgingEnv.rule_frac = (tuple(float(x) for x in cfg["warm_rule"].split(",")) if cfg.get("rule_frac_obs")
                                 else None)
         ns = argparse.Namespace(**cfg)

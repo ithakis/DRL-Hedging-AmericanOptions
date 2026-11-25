@@ -40,6 +40,7 @@ def agent_rollout(run_dir, m):
     HedgingEnv.rule_frac = (tuple(float(x) for x in cfg["warm_rule"].split(",")) if cfg.get("rule_frac_obs") else None)
     HedgingEnv.band = float(cfg.get("band") or 0.0)
     HedgingEnv.pnl_obs = cfg.get("precommit_b") is not None
+    HedgingEnv.pnl_offset = float(cfg["precommit_b"]) if cfg.get("precommit_b_range") else 0.0
     env = T.make_env(m, cfg["spread"], cfg["vega_obs"], argparse.Namespace(**cfg))
     actor, _ = D4PGQR.load_actor(Path(run_dir) / "best_actor.pt")
     obs = env.reset(np.arange(env.P))
@@ -58,6 +59,7 @@ def agent_rollout(run_dir, m):
         tot += r
         cost += np.abs(cfg["spread"] * x * b["h_price"][:, t, t])
     HedgingEnv.extra_obs = HedgingEnv.rule_obs = HedgingEnv.pnl_obs = False
+    HedgingEnv.pnl_offset = 0.0
     HedgingEnv.rule_frac = None
     HedgingEnv.band = 0.0
     return dict(net=tot, cost=cost, db=db)
