@@ -71,7 +71,7 @@ def get_args(argv=None):
     g.add_argument("--time_to_simulate", type=int, default=30)
     g.add_argument("--TradingDaysPerYear", type=int, default=252)
     g.add_argument("--numerical_accuracy", default="low")
-    g.add_argument("--pricing_backend", default="table", help="Heston only: table (v2) or quantlib")
+    g.add_argument("--pricing_backend", default="table", help="Heston only: table (v2, QuantLib table), quantlib, adi_qldays (ADI table, QuantLib day count) or adi_trading (ADI table, maturity tau/252 like the paths)")
     g.add_argument("--n_jobs", type=int, default=-1)
     g.add_argument("--market_dir", default="markets", help="cache of built markets (.npy, shared by runs)")
 
