@@ -195,6 +195,64 @@ class HestonAmericanPutTable:
                 for q in range(4)
             ]
         self.n_out_of_grid = {"m_low": 0, "m_high": 0, "vol": 0}
+        self._build_fast()
+
+    # ------------------------------------------------------------------ fast evaluation
+    # The same bicubic splines, evaluated for all points and all four outputs in a few vectorised
+    # numpy calls (no Python loop over tau).  Uses the FITPACK knots and coefficients of the
+    # RectBivariateSpline objects above, so the values equal spline.ev() up to rounding (~1e-15).
+    fast = True  # class switch: False = the original per-tau loop over spline.ev()
+
+    def _build_fast(self):
+        n_tau = len(self.taus)
+        assert np.array_equal(self.taus, np.arange(self.taus[0], self.taus[0] + n_tau)), "taus must be contiguous"
+        tx, ty, C = [], None, []
+        for k, tau in enumerate(self.taus):
+            sp = self._splines[int(tau)]
+            kx, ky = sp[0].get_knots()
+            if ty is None:
+                ty = ky
+            assert np.array_equal(ky, ty), "vol knots must be the same for all tau"
+            tx.append(kx)
+            nx, ny = len(kx) - 4, len(ky) - 4
+            C.append(np.stack([s.get_coeffs().reshape(nx, ny) for s in sp], axis=-1))  # (nx, ny, 4)
+        self._tx = np.stack(tx)                    # (n_tau, Lx)
+        self._ty = np.asarray(ty)                  # (Ly,)
+        self._C = np.stack(C)                      # (n_tau, nx, ny, 4)
+        Lx = self._tx.shape[1]
+        # one sorted array for all tau: row k shifted by k * span, so a single searchsorted finds the
+        # knot interval of every point in its own row
+        self._span = float(self._tx.max() - self._tx.min()) + 10.0
+        self._tx_flat = (self._tx + self._span * np.arange(n_tau)[:, None]).ravel()
+        self._Lx = Lx
+
+    @staticmethod
+    def _basis3(knot, i, x):
+        """Cubic B-spline basis values N_{i-3..i}(x) (de Boor), vectorised.  knot(o) -> t[i + o] per point."""
+        left = [None] + [x - knot(1 - j) for j in (1, 2, 3)]
+        right = [None] + [knot(j) - x for j in (1, 2, 3)]
+        N = [np.ones_like(x)]
+        for j in (1, 2, 3):
+            saved = np.zeros_like(x)
+            for r in range(j):
+                temp = N[r] / (right[r + 1] + left[j - r])
+                N[r] = saved + right[r + 1] * temp
+                saved = left[j - r] * temp
+            N.append(saved)
+        return np.stack(N, axis=1)  # (P, 4)
+
+    def _ev_fast(self, k, x, v):
+        """All four outputs at points (tau index k, log m x, vol v), all inside the grid.  -> (4, P)."""
+        Lx, Ly = self._Lx, len(self._ty)
+        pos = np.searchsorted(self._tx_flat, x + self._span * k, side="right") - 1 - k * Lx
+        i = np.clip(pos, 3, Lx - 5)
+        j = np.clip(np.searchsorted(self._ty, v, side="right") - 1, 3, Ly - 5)
+        txk = self._tx
+        Nx = self._basis3(lambda o: txk[k, i + o], i, x)
+        Ny = self._basis3(lambda o: self._ty[j + o], j, v)
+        a = np.arange(-3, 1)
+        G = self._C[k[:, None, None], (i[:, None] + a)[:, :, None], (j[:, None] + a)[:, None, :]]  # (P, 4, 4, 4)
+        return np.einsum("pa,pb,pabq->qp", Nx, Ny, G)
 
     # ------------------------------------------------------------------ io
     @classmethod
@@ -211,6 +269,24 @@ class HestonAmericanPutTable:
                 print(f"Building Heston pricing table `{path}` for {cfg}")
             data = build_table(cfg, n_jobs=n_jobs, verbose=verbose)
             np.savez_compressed(path, **data)
+        return cls(data)
+
+    @classmethod
+    def load_or_build_adi(cls, cfg: HestonTableConfig, table_dir=None, quantlib_maturity=True, verbose=True):
+        """Single-sweep ADI table (environment/heston_adi.py, 400 x 200, 8 steps per day), cached."""
+        from environment.heston_adi import ADIGrid, build_table_adi
+
+        g = ADIGrid(ns=400, nv=200, steps_per_day=8)
+        table_dir = Path(table_dir) if table_dir else DEFAULT_TABLE_DIR
+        table_dir.mkdir(parents=True, exist_ok=True)
+        mode = "qldays" if quantlib_maturity else "trading"
+        path = table_dir / f"heston_american_put_adi_{mode}_{cfg.key()}_{g.ns}x{g.nv}x{g.steps_per_day}.npz"
+        if path.exists():
+            if verbose:
+                print(f"Loading ADI Heston table `{path}`")
+            return cls(dict(np.load(path, allow_pickle=False)))
+        data = build_table_adi(cfg, g, verbose=verbose, quantlib_maturity=quantlib_maturity)
+        np.savez_compressed(path, **data)
         return cls(data)
 
     # ------------------------------------------------------------------ evaluation
@@ -238,7 +314,19 @@ class HestonAmericanPutTable:
             v_clamped = np.clip(v, self.vols[0], self.vols[-1])
             self.n_out_of_grid["vol"] += int(np.sum(v_clamped != v))
             tt = np.round(ttm[idx]).astype(int)
-            for tau in np.unique(tt):
+            if self.fast:
+                kk = tt - int(self.taus[0])
+                lo, hi = self.log_m[kk, 0], self.log_m[kk, -1]
+                inside = (x >= lo) & (x <= hi)
+                below = x < lo  # deep ITM put
+                self.n_out_of_grid["m_low"] += int(below.sum())
+                self.n_out_of_grid["m_high"] += int((x > hi).sum())
+                if np.any(inside):
+                    out[:, idx[inside]] = self._ev_fast(kk[inside], x[inside], v_clamped[inside])
+                if np.any(below):
+                    out[0, idx[below]] = 1.0 - np.exp(x[below])  # per unit strike
+                    out[1, idx[below]] = -1.0
+            for tau in (() if self.fast else np.unique(tt)):
                 sel = tt == tau
                 k = int(tau) - int(self.taus[0])
                 xs, vs, ii = x[sel], v_clamped[sel], idx[sel]

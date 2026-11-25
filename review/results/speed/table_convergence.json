@@ -1,0 +1,23 @@
+{
+  "config": {
+    "kappa": 1.0,
+    "theta": 0.09,
+    "volvol": 0.3,
+    "rho": -0.7,
+    "r": 0.02,
+    "q": 0.0,
+    "TradingDaysPerYear": 252,
+    "max_ttm": 60,
+    "m_min": 0.5,
+    "m_max": 2.0,
+    "n_m": 81,
+    "vol_min": 0.02,
+    "vol_max": 1.0,
+    "n_vol": 25,
+    "N_gridpoints": 50,
+    "vega_mode": "central",
+    "vega_h": 0.005,
+    "eps_iv": 0.02
+  },
+  "seconds": 1098.7928221225739
+}

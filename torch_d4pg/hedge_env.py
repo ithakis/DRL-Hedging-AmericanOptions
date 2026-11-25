@@ -16,14 +16,28 @@ tests/test_torch_d4pg.py checks it against MainPortfolio.step on the same market
 import numpy as np
 
 
+def neutral_amounts(G, gh, V, vh):
+    """n_G = -G/gamma^h, n_V = -V/vega^h (contracts that make gamma / vega zero), finite."""
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ng = np.clip(np.nan_to_num(-G / gh, nan=0.0, posinf=0.0, neginf=0.0), -1e3, 1e3)
+        nv = np.clip(np.nan_to_num(-V / vh, nan=0.0, posinf=0.0, neginf=0.0), -1e3, 1e3)
+    return ng, nv
+
+
 class HedgingEnv:
+    extra_obs = False  # class switch (batch B): append [time left t/T, volatility V_t] to the state
+    band = 0.0  # class switch: no option trade when |contracts| < band (the no-trade band of rule (b))
+    rule_obs = False  # class switch: append n_G = -Gamma/gamma^h and n_V = -Vega/vega^h (the rule's inputs)
+    pnl_obs = False  # class switch: append the accumulated episode P&L W_t (last column; pre-commitment objective)
+
     def __init__(self, market, spread: float, vega_obs: bool):
         self.m = market
         self.spread = float(spread)
         self.vega_obs = bool(vega_obs)
         self.P, self.T1 = market["S"].shape
         self.T = self.T1 - 1  # number of hedging steps per episode
-        self.obs_dim = 5 if vega_obs else 3
+        self.obs_dim = ((5 if vega_obs else 3) + (2 if HedgingEnv.extra_obs else 0) + (2 if HedgingEnv.rule_obs else 0)
+                        + (1 if HedgingEnv.pnl_obs else 0))
 
     # ------------------------------------------------------------------
     def reset(self, idx):
@@ -35,6 +49,7 @@ class HedgingEnv:
         self.n = np.zeros((self.B, self.T1))
         self.t = 0
         self.pos_prev = np.zeros(self.B)
+        self.W = np.zeros(self.B)  # accumulated P&L of the episode so far
         return self._obs()
 
     def _port(self, t):
@@ -50,6 +65,12 @@ class HedgingEnv:
         cols = [b["S"][:, t], G, b["h_gamma"][:, t, t]]
         if self.vega_obs:
             cols += [V, b["h_vega"][:, t, t]]
+        if HedgingEnv.extra_obs:
+            cols += [np.full(self.B, 1.0 - t / self.T), b["V"][:, t]]
+        if HedgingEnv.rule_obs:
+            cols += list(neutral_amounts(cols[1], cols[2], cols[3], cols[4]))
+        if HedgingEnv.pnl_obs:
+            cols += [self.W.copy()]
         obs = np.stack(cols, axis=1)
         if t == self.T:
             obs[:, 1:] = 0.0
@@ -72,6 +93,8 @@ class HedgingEnv:
         a = np.clip(np.asarray(action, dtype=float).reshape(self.B), 0.0, 1.0)
         lo, hi = self.bounds()
         x = lo + a * (hi - lo)
+        if HedgingEnv.band > 0:
+            x = np.where(np.abs(x) < HedgingEnv.band, 0.0, x)
         self.n[:, t] = x
         cost = -np.abs(self.spread * x * b["h_price"][:, t, t])
         act = ~b["h_inactive"][:, t, :]
@@ -82,4 +105,74 @@ class HedgingEnv:
         pnl = pnl + pos * (b["S"][:, t + 1] - b["S"][:, t])
         self.t = t + 1
         done = self.t == self.T
+        self.W = self.W + cost + pnl
         return self._obs(), cost + pnl, done, x
+
+
+class ResidualRuleEnv(HedgingEnv):
+    """Warm start from a tuned rule: the agent learns a correction on top of rule (b).
+
+    rule (b):  x_rule = clip(a n_G + b n_V, [lo, hi]),  x_rule = 0 if |x_rule| < w  (contracts)
+               f_rule = (x_rule - lo) / (hi - lo)       (the same trade as a hedge fraction)
+    agent:     u = 2 action - 1 in [-1, 1]  (action = the agent's usual fraction (u + 1) / 2)
+    traded:    f = clip(f_rule + scale * u, 0, 1)
+    An actor with output u = 0 (the near-zero initialised head) plays exactly the rule.
+    The rule only uses the state (n_G = -Gamma / gamma^h, n_V = -Vega / vega^h), so the policy stays Markov.
+    """
+
+    def __init__(self, market, spread: float, vega_obs: bool, rule=(0.0, 0.0, 0.0), scale: float = 1.0):
+        super().__init__(market, spread, vega_obs)
+        self.rule_a, self.rule_b, self.rule_w = (float(x) for x in rule)
+        self.scale = float(scale)
+        self.last_frac = None
+
+    def rule_fraction(self):
+        t, b = self.t, self.b
+        G, V = self._port(t)
+        lo, hi = self.bounds()
+        with np.errstate(divide="ignore", invalid="ignore"):
+            n_g = np.nan_to_num(-G / b["h_gamma"][:, t, t], nan=0.0)
+            n_v = np.nan_to_num(-V / b["h_vega"][:, t, t], nan=0.0) if self.vega_obs else np.zeros_like(n_g)
+            x = np.clip(self.rule_a * n_g + self.rule_b * n_v, lo, hi)
+            x = np.where(np.abs(x) < self.rule_w, 0.0, x)
+            f = np.where(hi > lo, (x - lo) / (hi - lo), 0.0)
+        return np.clip(np.nan_to_num(f, nan=0.0), 0.0, 1.0)
+
+    def step(self, action):
+        u = 2.0 * np.clip(np.asarray(action, dtype=float).reshape(self.B), 0.0, 1.0) - 1.0
+        f = np.clip(self.rule_fraction() + self.scale * u, 0.0, 1.0)
+        self.last_frac = f
+        return super().step(f)
+
+
+class GateRuleEnv(ResidualRuleEnv):
+    """Learned gate on top of the rule: each day the agent chooses g in {0, 1}.
+
+        x_full = clip(a n_G + b n_V, [lo, hi])      (rule (b) without its band)
+        traded = g * x_full                         (g = 0: no hedge-option trade today)
+    Rule (b) is the gate g_rule = 1[|x_full| >= w], so the agent can learn a state-dependent band.
+    step(g) takes g in {0, 1} (B,).
+    """
+
+    def full_trade(self):
+        t, b = self.t, self.b
+        G, V = self._port(t)
+        lo, hi = self.bounds()
+        with np.errstate(divide="ignore", invalid="ignore"):
+            n_g = np.nan_to_num(-G / b["h_gamma"][:, t, t], nan=0.0)
+            n_v = np.nan_to_num(-V / b["h_vega"][:, t, t], nan=0.0) if self.vega_obs else np.zeros_like(n_g)
+            x = np.clip(self.rule_a * n_g + self.rule_b * n_v, lo, hi)
+        return np.nan_to_num(x, nan=0.0), lo, hi
+
+    def rule_gate(self):
+        x, _, _ = self.full_trade()
+        return (np.abs(x) >= self.rule_w).astype(float)
+
+    def step(self, g):
+        x, lo, hi = self.full_trade()
+        x = np.asarray(g, dtype=float).reshape(self.B) * x
+        with np.errstate(divide="ignore", invalid="ignore"):
+            f = np.where(hi > lo, (x - lo) / (hi - lo), 0.0)
+        f = np.clip(np.nan_to_num(f, nan=0.0), 0.0, 1.0)
+        self.last_frac = f
+        return HedgingEnv.step(self, f)

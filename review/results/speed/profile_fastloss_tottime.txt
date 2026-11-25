@@ -1,0 +1,30 @@
+Wed Nov 25 12:33:38 2026    /tmp/e3a_fastloss.prof
+
+         35312708 function calls (32063334 primitive calls) in 167.156 seconds
+
+   Ordered by: internal time
+   List reduced from 6625 to 20 due to restriction <20>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+     7376   99.074    0.013   99.087    0.013 /Users/alexanderithakis/Documents/GitHub/DRL-Hedging-speed/torch_d4pg/distributional.py:52(_qh_kernel_sorted)
+   100674    8.951    0.000    8.951    0.000 {built-in method torch.sigmoid}
+   100674    7.914    0.000    7.914    0.000 {built-in method torch.layer_norm}
+    14936    5.635    0.000    5.886    0.000 {method 'run_backward' of 'torch._C._EngineBase' objects}
+    11120    5.412    0.000   13.155    0.001 /Users/alexanderithakis/Documents/GitHub/DRL-Hedging-speed/environment/heston_table.py:244(_ev_fast)
+    11120    5.208    0.000    5.208    0.000 {built-in method numpy._core._multiarray_umath.c_einsum}
+   134232    4.085    0.000    4.085    0.000 {built-in method torch._C._nn.linear}
+   100674    2.210    0.000   11.161    0.000 /Users/alexanderithakis/Documents/GitHub/DRL-Hedging-speed/torch_d4pg/networks.py:68(<lambda>)
+    11120    1.189    0.000   15.035    0.001 /Users/alexanderithakis/Documents/GitHub/DRL-Hedging-speed/environment/heston_table.py:275(evaluate)
+    11156    1.150    0.000    2.759    0.000 /Users/alexanderithakis/miniforge3/lib/python3.10/site-packages/torch/optim/adam.py:345(_single_tensor_adam)
+    33558    1.145    0.000   23.895    0.001 /Users/alexanderithakis/Documents/GitHub/DRL-Hedging-speed/torch_d4pg/networks.py:62(forward)
+    15670    1.032    0.000    1.242    0.000 /Users/alexanderithakis/Documents/GitHub/DRL-Hedging-speed/torch_d4pg/hedge_env.py:55(_port)
+   465978    0.968    0.000    0.968    0.000 {method 'mul_' of 'torch._C.TensorBase' objects}
+     7376    0.950    0.000  100.686    0.014 /Users/alexanderithakis/Documents/GitHub/DRL-Hedging-speed/torch_d4pg/distributional.py:132(quantile_huber_loss)
+3549363/1042473    0.894    0.000    0.977    0.000 /Users/alexanderithakis/miniforge3/lib/python3.10/site-packages/torch/nn/modules/module.py:2823(named_modules)
+  1005971    0.673    0.000    2.188    0.000 /Users/alexanderithakis/miniforge3/lib/python3.10/site-packages/torch/nn/modules/module.py:2636(_named_members)
+    22240    0.653    0.000    0.653    0.000 {method 'searchsorted' of 'numpy.ndarray' objects}
+    22240    0.591    0.000    1.701    0.000 /Users/alexanderithakis/Documents/GitHub/DRL-Hedging-speed/environment/heston_table.py:229(_basis3)
+    14752    0.577    0.000    0.577    0.000 {method 'repeat_interleave' of 'torch._C.TensorBase' objects}
+   465978    0.567    0.000    0.567    0.000 {method 'add_' of 'torch._C.TensorBase' objects}
+
+

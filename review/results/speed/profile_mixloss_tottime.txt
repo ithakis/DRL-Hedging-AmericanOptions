@@ -1,0 +1,25 @@
+Wed Nov 25 13:12:28 2026    /tmp/e3a_mix.prof
+
+         35367934 function calls (32118536 primitive calls) in 144.126 seconds
+
+   Ordered by: internal time
+   List reduced from 6625 to 15 due to restriction <15>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+     7376   77.255    0.010   77.267    0.010 /Users/alexanderithakis/Documents/GitHub/DRL-Hedging-speed/torch_d4pg/distributional.py:109(_qh_kernel_weighted)
+   100674    8.731    0.000    8.731    0.000 {built-in method torch.sigmoid}
+   100674    7.807    0.000    7.807    0.000 {built-in method torch.layer_norm}
+    11120    5.359    0.000   13.105    0.001 /Users/alexanderithakis/Documents/GitHub/DRL-Hedging-speed/environment/heston_table.py:244(_ev_fast)
+    11120    5.209    0.000    5.209    0.000 {built-in method numpy._core._multiarray_umath.c_einsum}
+    14936    4.535    0.000    4.623    0.000 {method 'run_backward' of 'torch._C._EngineBase' objects}
+   134232    3.907    0.000    3.907    0.000 {built-in method torch._C._nn.linear}
+   100674    2.196    0.000   10.928    0.000 /Users/alexanderithakis/Documents/GitHub/DRL-Hedging-speed/torch_d4pg/networks.py:68(<lambda>)
+    33558    1.352    0.000   23.569    0.001 /Users/alexanderithakis/Documents/GitHub/DRL-Hedging-speed/torch_d4pg/networks.py:62(forward)
+    11120    1.229    0.000   15.021    0.001 /Users/alexanderithakis/Documents/GitHub/DRL-Hedging-speed/environment/heston_table.py:275(evaluate)
+    11156    1.150    0.000    2.743    0.000 /Users/alexanderithakis/miniforge3/lib/python3.10/site-packages/torch/optim/adam.py:345(_single_tensor_adam)
+    18567    1.088    0.000    1.088    0.000 {method 'astype' of 'numpy.ndarray' objects}
+    15670    0.995    0.000    1.205    0.000 /Users/alexanderithakis/Documents/GitHub/DRL-Hedging-speed/torch_d4pg/hedge_env.py:55(_port)
+     7376    0.954    0.000  121.983    0.017 /Users/alexanderithakis/Documents/GitHub/DRL-Hedging-speed/torch_d4pg/agent_kernel.py:71(learn)
+   465978    0.953    0.000    0.953    0.000 {method 'mul_' of 'torch._C.TensorBase' objects}
+
+
