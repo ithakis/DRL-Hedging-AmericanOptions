@@ -54,6 +54,8 @@ for V in $VARIANT; do VARIANT=$V; case $V in
   # pre-commitment objective (Rockafellar-Uryasev): b = rule (b) validation VaR95 (P1) or 0.75x (P2)
   P1) EXTRA="--extra_obs --kernel_mx 3 --table_dir ../DRL-Hedging-retrain/pricing_tables --n_envs 16 --train_episodes 12000 --val_every 500 --residual_scale 0.5 --actor_freeze_episodes 1000 --actor_sizes 64,64,64 --critic_sizes 64,64,64 --activation swish3 --lr 6e-4 --actor_lr 3e-4 --ema_decay 0.999 --tau 0.003 --noise_mode pre --sigma 1.0 --sigma_floor 0.2 --band BANDW --train_obj mean --precommit_b PCB" ;;
   P2) EXTRA="--extra_obs --kernel_mx 3 --table_dir ../DRL-Hedging-retrain/pricing_tables --n_envs 16 --train_episodes 12000 --val_every 500 --residual_scale 0.5 --actor_freeze_episodes 1000 --actor_sizes 64,64,64 --critic_sizes 64,64,64 --activation swish3 --lr 6e-4 --actor_lr 3e-4 --ema_decay 0.999 --tau 0.003 --noise_mode pre --sigma 1.0 --sigma_floor 0.2 --band BANDW --train_obj mean --precommit_b PCB75" ;;
+  P3) EXTRA="--extra_obs --kernel_mx 3 --table_dir ../DRL-Hedging-retrain/pricing_tables --n_envs 16 --train_episodes 12000 --val_every 500 --residual_scale 0.5 --actor_freeze_episodes 1000 --actor_sizes 64,64,64 --critic_sizes 64,64,64 --activation swish3 --lr 6e-4 --actor_lr 3e-4 --ema_decay 0.999 --tau 0.003 --noise_mode pre --sigma 1.0 --sigma_floor 0.2 --band BANDW --train_obj mean --precommit_b PCB60" ;;
+  P2L) EXTRA="--extra_obs --kernel_mx 3 --table_dir ../DRL-Hedging-retrain/pricing_tables --n_envs 16 --train_episodes 20000 --val_every 500 --residual_scale 0.5 --actor_freeze_episodes 1000 --actor_sizes 64,64,64 --critic_sizes 64,64,64 --activation swish3 --lr 6e-4 --actor_lr 3e-4 --ema_decay 0.999 --tau 0.003 --noise_mode pre --sigma 1.0 --sigma_floor 0.2 --band BANDW --train_obj mean --precommit_b PCB75" ;;
   SBres) EXTRA="--extra_obs --n_step 1 --n_envs 16 --train_episodes 20000 --val_every 500 --residual_scale 0.5 --actor_freeze_episodes 1000" ;;
   KBres) EXTRA="--extra_obs --kernel_mx 3 --table_dir ../DRL-Hedging-retrain/pricing_tables --n_envs 16 --train_episodes 12000 --val_every 500 --residual_scale 0.5 --actor_freeze_episodes 1000" ;;
   S1) EXTRA="--n_step 1 --n_envs 16 --train_episodes 20000 --val_every 500" ;;
@@ -68,7 +70,7 @@ for seed in $SEEDS; do for c in 0.005 0.01 0.02; do
   SCRIPT=train_d4pg.py; case $V in gate*) SCRIPT=train_gate.py;; esac
   WR="--warm_rule $R"; case $V in A*|B*) WR="";; SBres|KBres|SBresband|KBresband|E*|F*|P*) ;; L*|K*|S*) WR="";; esac
   case $c in 0.005) PCB=24.59;; 0.01) PCB=27.87;; 0.02) PCB=32.80;; esac
-  PCB75=$(python -c "print(round(0.75*$PCB, 2))"); EXTRAc=${EXTRA//PCB75/$PCB75}; EXTRAc=${EXTRAc//PCB/$PCB}
+  PCB75=$(python -c "print(round(0.75*$PCB, 2))"); PCB60=$(python -c "print(round(0.6*$PCB, 2))"); EXTRAc=${EXTRA//PCB75/$PCB75}; EXTRAc=${EXTRAc//PCB60/$PCB60}; EXTRAc=${EXTRAc//PCB/$PCB}
   W=${R##*,}; W15=$(python -c "print(round(1.5*$W, 3))"); EXTRA2=${EXTRAc//BANDX15/$W15}
   echo "$name $SCRIPT $ARGS --market_dir $MARKETS $WR --n_train_paths 40000 ${EXTRA2//BANDW/$W}"
 done; done; done | xargs -P "$P" -L 1 bash -c 'echo "$(date +%H:%M) start $0"; \
