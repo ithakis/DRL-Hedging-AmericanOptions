@@ -30,6 +30,8 @@ ARMS = {
     # batch 4 (robustness)
     "rv0": ["--train_init_vol_range", "0.12,0.5"],
     "cand": ["--kernel_arrivals", "2", "--actor_on_current", "--dqda_norm", "--dqda_clip", "3", "--squash", "0.5"],
+    "candrv": ["--kernel_arrivals", "2", "--actor_on_current", "--dqda_norm", "--dqda_clip", "3", "--squash", "0.5",
+               "--train_init_vol_range", "0.12,0.5"],
     "stk": ["--actor_on_current", "--dqda_norm", "--dqda_clip", "3", "--squash", "0.5"],  # small batch-2 positives
 }
 
