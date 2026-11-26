@@ -340,7 +340,7 @@ class Utils:
         # min volatility in case the QE scheme generates negative non possitive values
         self._min_vol = 0.00001
 
-        if pricing_backend not in ("quantlib", "table", "adi_qldays", "adi_trading"):
+        if pricing_backend not in ("quantlib", "table", "adi_qldays", "adi_trading", "adi_trading_eu"):
             raise ValueError("pricing_backend must be 'quantlib', 'table', 'adi_qldays' or 'adi_trading'.")
         self.pricing_backend = pricing_backend
         self.table_dir = table_dir
@@ -365,7 +365,8 @@ class Utils:
                 # days as QuantLib does here (round(tau*365/252) calendar days / 365); adi_trading uses
                 # tau / 252, the clock of the simulated paths.
                 self._heston_table = HestonAmericanPutTable.load_or_build_adi(
-                    cfg, table_dir=self.table_dir, quantlib_maturity=(backend == "adi_qldays"))
+                    cfg, table_dir=self.table_dir, quantlib_maturity=(backend == "adi_qldays"),
+                    european=(backend == "adi_trading_eu"))
             else:
                 self._heston_table = HestonAmericanPutTable.load_or_build(
                     cfg, table_dir=self.table_dir, n_jobs=self.n_jobs
@@ -1058,7 +1059,7 @@ class Utils:
                 del results
                 gc.collect()
 
-        elif stochastic_process == "Heston" and getattr(self, "pricing_backend", "quantlib") in ("table", "adi_qldays", "adi_trading"):
+        elif stochastic_process == "Heston" and getattr(self, "pricing_backend", "quantlib") in ("table", "adi_qldays", "adi_trading", "adi_trading_eu"):
             # Precomputed QuantLib table (same engine, same Greek definitions), vectorised.
             # ttm == 0 -> payoff, ttm < 0 -> zeros, as in the QuantLib branch below.
             price, delta, gamma, vega = self.heston_table().evaluate(S0, K, ttms, iv)

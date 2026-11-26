@@ -272,20 +272,21 @@ class HestonAmericanPutTable:
         return cls(data)
 
     @classmethod
-    def load_or_build_adi(cls, cfg: HestonTableConfig, table_dir=None, quantlib_maturity=True, verbose=True):
+    def load_or_build_adi(cls, cfg: HestonTableConfig, table_dir=None, quantlib_maturity=True, verbose=True,
+                          european=False):
         """Single-sweep ADI table (environment/heston_adi.py, 400 x 200, 8 steps per day), cached."""
         from environment.heston_adi import ADIGrid, build_table_adi
 
         g = ADIGrid(ns=400, nv=200, steps_per_day=8)
         table_dir = Path(table_dir) if table_dir else DEFAULT_TABLE_DIR
         table_dir.mkdir(parents=True, exist_ok=True)
-        mode = "qldays" if quantlib_maturity else "trading"
+        mode = ("qldays" if quantlib_maturity else "trading") + ("_eu" if european else "")
         path = table_dir / f"heston_american_put_adi_{mode}_{cfg.key()}_{g.ns}x{g.nv}x{g.steps_per_day}.npz"
         if path.exists():
             if verbose:
                 print(f"Loading ADI Heston table `{path}`")
             return cls(dict(np.load(path, allow_pickle=False)))
-        data = build_table_adi(cfg, g, verbose=verbose, quantlib_maturity=quantlib_maturity)
+        data = build_table_adi(cfg, g, verbose=verbose, quantlib_maturity=quantlib_maturity, european=european)
         np.savez_compressed(path, **data)
         return cls(data)
 

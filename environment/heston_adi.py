@@ -67,8 +67,9 @@ def _central_weights(x):
     return b, d
 
 
-def build_operators(s, v, kappa, theta, xi, rho, r, q):
-    """Sparse A0 (mixed), A1 (s-direction), A2 (v-direction) on u.ravel() with index i * nv + j."""
+def build_operators(s, v, kappa, theta, xi, rho, r, q, european=False):
+    """Sparse A0 (mixed), A1 (s-direction), A2 (v-direction) on u.ravel() with index i * nv + j.
+    european=True: at s = 0 the price decays as K exp(-r tau) (u_tau = -r u) instead of staying at the payoff K."""
     ns, nv = len(s), len(v)
     idx = lambda i, j: i * nv + j
     bs, ds = _central_weights(s)
@@ -93,9 +94,9 @@ def build_operators(s, v, kappa, theta, xi, rho, r, q):
     a = 0.5 * s[-1] ** 2 * v / h ** 2 * 2.0
     add(1, idx(i, jj), idx(i - 1, jj), a)
     add(1, idx(i, jj), idx(i, jj), -a)
-    ii_all = np.arange(1, ns)[:, None]
-    add(1, np.broadcast_to(idx(ii_all, jj), (ns - 1, nv)), np.broadcast_to(idx(ii_all, jj), (ns - 1, nv)),
-        np.full((ns - 1, nv), -0.5 * r))
+    ii_all = np.arange(0 if european else 1, ns)[:, None]
+    add(1, np.broadcast_to(idx(ii_all, jj), (len(ii_all), nv)), np.broadcast_to(idx(ii_all, jj), (len(ii_all), nv)),
+        np.full((len(ii_all), nv), -0.5 * r))
     # ---------------- A2: v-direction, rows i >= 1
     ii = np.arange(1, ns)[:, None]
     J = np.arange(1, nv - 1)[None, :]
@@ -116,6 +117,8 @@ def build_operators(s, v, kappa, theta, xi, rho, r, q):
     add(2, idx(ii, nv - 1), idx(ii, nv - 1), np.full(ii.shape, -a))
     add(2, np.broadcast_to(idx(ii, jj), (ns - 1, nv)), np.broadcast_to(idx(ii, jj), (ns - 1, nv)),
         np.full((ns - 1, nv), -0.5 * r))
+    if european:  # s = 0 row: the other half of -r u (A1 holds the first half)
+        add(2, idx(0, jj), idx(0, jj), np.full((1, nv), -0.5 * r))
     # ---------------- A0: mixed derivative, interior in both directions
     ii = np.arange(1, ns - 1)[:, None]
     J = np.arange(1, nv - 1)[None, :]
@@ -141,7 +144,7 @@ def quantlib_days(tau_days, trading_days_per_year=252):
 
 
 def solve_surface(kappa, theta, xi, rho, r, q, n_days, days_per_year=252, grid: ADIGrid = ADIGrid(),
-                  record_days=None):
+                  record_days=None, european=False):
     """Backward sweep.  Returns s (ns,), v (nv,), U (n_days + 1, ns, nv) with U[d] = price at tau = d days.
 
     record_days (optional, increasing ints): instead record U after record_days[d-1] steps of size
@@ -150,7 +153,7 @@ def solve_surface(kappa, theta, xi, rho, r, q, n_days, days_per_year=252, grid: 
         n_days = len(record_days)
     s, v = s_grid(grid), v_grid(grid)
     ns, nv = len(s), len(v)
-    A0, A1, A2 = build_operators(s, v, kappa, theta, xi, rho, r, q)
+    A0, A1, A2 = build_operators(s, v, kappa, theta, xi, rho, r, q, european=european)
     A = (A0 + A1 + A2).tocsc()
     N = ns * nv
     I = sp.identity(N, format="csc")
@@ -166,6 +169,8 @@ def solve_surface(kappa, theta, xi, rho, r, q, n_days, days_per_year=252, grid: 
     out[0] = U.reshape(ns, nv)
 
     def it_update(Ubar, lam, h):
+        if european:  # no early-exercise constraint (lam stays 0)
+            return Ubar, lam
         Unew = np.maximum(Ubar - h * lam, g)
         lam = np.maximum(0.0, lam + (g - Ubar) / h)
         return Unew, lam
@@ -205,7 +210,7 @@ def _delta_gamma(s, U):
     return De, Ga
 
 
-def build_table_adi(cfg, grid: ADIGrid = ADIGrid(), verbose=True, quantlib_maturity=True):
+def build_table_adi(cfg, grid: ADIGrid = ADIGrid(), verbose=True, quantlib_maturity=True, european=False):
     """Same output format as heston_table.build_table (taus, log_m, vols, values (n_tau, 4, n_m, n_vol)).
     quantlib_maturity=True prices tau trading days as QuantLib does (round(tau * 365 / 252) calendar days /
     365, see quantlib_days), so the table matches the current one; False uses tau / 252 exactly."""
@@ -214,7 +219,7 @@ def build_table_adi(cfg, grid: ADIGrid = ADIGrid(), verbose=True, quantlib_matur
     t0 = time.time()
     n_days = cfg.max_ttm
     kw = dict(kappa=cfg.kappa, xi=cfg.volvol, rho=cfg.rho, r=cfg.r, q=cfg.q, n_days=n_days,
-              days_per_year=cfg.TradingDaysPerYear, grid=grid)
+              days_per_year=cfg.TradingDaysPerYear, grid=grid, european=european)
     if quantlib_maturity:
         cal = [quantlib_days(t, cfg.TradingDaysPerYear) for t in range(1, n_days + 1)]
         assert all(b >= a for a, b in zip(cal, cal[1:]))
