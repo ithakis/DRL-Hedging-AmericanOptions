@@ -1,0 +1,26 @@
+{
+  "0.005": {
+    "drl_gamma_ratio": 0.22337668768890653,
+    "drl_vega_ratio": 0.2583500426902969,
+    "rule_gamma_ratio": 0.20624425149942832,
+    "rule_vega_ratio": 0.26752307786097085,
+    "drl_meanstd": 25.292592715289945,
+    "rule_meanstd": 25.18367237593432
+  },
+  "0.01": {
+    "drl_gamma_ratio": 0.16443036424839966,
+    "drl_vega_ratio": 0.22727924488818058,
+    "rule_gamma_ratio": 0.17936342740253336,
+    "rule_vega_ratio": 0.22087878602468924,
+    "drl_meanstd": 27.882139962295906,
+    "rule_meanstd": 27.708797914019947
+  },
+  "0.02": {
+    "drl_gamma_ratio": 0.17912310050414457,
+    "drl_vega_ratio": 0.16924477361321957,
+    "rule_gamma_ratio": 0.1249540683965409,
+    "rule_vega_ratio": 0.19313753679371545,
+    "drl_meanstd": 32.77366568173727,
+    "rule_meanstd": 32.57706185814695
+  }
+}
