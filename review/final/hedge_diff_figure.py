@@ -28,6 +28,7 @@ a = A.block_args("B", ["--market_dir", "../DRL-Hedging-retrain/markets", "--pric
 m = A.T.get_market(a, 4242, 8192)
 Wbins = np.arange(-40, 22.5, 2.5)
 cmap = LinearSegmentedColormap.from_list("div", ["#2f62c9", "#f0efec", "#c9412f"])
+plt.rcdefaults()
 fig, axes = plt.subplots(1, 3, figsize=(13, 4.2), sharey=True, constrained_layout=True, facecolor="white")
 for ax_ in axes:
     ax_.set_facecolor("white")
