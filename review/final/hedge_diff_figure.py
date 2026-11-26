@@ -10,6 +10,7 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+plt.style.use("default")
 import numpy as np
 import torch
 from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm
